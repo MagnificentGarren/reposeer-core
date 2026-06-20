@@ -1,0 +1,19 @@
+# Byte-compiled / optimized / DLL support
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Project-specific local databases (ChromaDB cache & storage)
+chroma_db_data/
+.cache/
+
+# IDE / Editor configuration folders
+.vscode/
+.idea/
