@@ -164,7 +164,7 @@ def launch_chat_engine():
                                 avg_metrics["Scalability"] += payload["scalability_percentage"] / 5
                                 all_weaknesses.extend(payload.get("flagged_weaknesses", []))
                         
-                        # -------------------------------------------------------------
+                       # -------------------------------------------------------------
                         # Sync To SQLite Memory Ledger Database
                         # -------------------------------------------------------------
                         meta_payload = {
@@ -177,6 +177,12 @@ def launch_chat_engine():
                         
                         from storage.memory_ledger import log_completed_session
                         log_completed_session(meta_payload, avg_metrics, unique_weaknesses)
+                        
+                        # -------------------------------------------------------------
+                        # Export Structured Markdown Scorecard Report (Destination A)
+                        # -------------------------------------------------------------
+                        from storage.report_exporter import export_session_report
+                        export_session_report(meta_payload, avg_metrics, unique_weaknesses, running_scores)
                     else:
                         print("\n⚠️ Note: No answer entries were recorded for scoring evaluation.")
                         

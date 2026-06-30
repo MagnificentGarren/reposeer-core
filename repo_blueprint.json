@@ -1,5 +1,6 @@
 {
     "project_root": "reposeer-core",
+    "manifest_dependencies": {},
     "directory_tree": {
         "root": [
             "chat_interface.py"
@@ -12,16 +13,19 @@
             "parser.py",
             "repo_graph.py",
             "vector_store.py"
-        ],
-        "docs": []
+        ]
     },
     "modules": {
         "chat_interface.py": {
+            "language": "python",
             "imports": [
                 "sys",
                 "random",
                 "agents.orchestrator",
-                "storage.memory_ledger"
+                "os",
+                "json",
+                "storage.memory_ledger",
+                "storage.report_exporter"
             ],
             "classes": {},
             "standalone_functions": [
@@ -30,7 +34,8 @@
                 "launch_chat_engine"
             ]
         },
-        "agents.orchestrator.py": {
+        "agents/orchestrator.py": {
+            "language": "python",
             "imports": [
                 "os",
                 "typing",
@@ -61,7 +66,8 @@
                 "execution_router"
             ]
         },
-        "analyzer.crawler.py": {
+        "analyzer/crawler.py": {
+            "language": "python",
             "imports": [
                 "os",
                 "analyzer.parser",
@@ -72,7 +78,8 @@
                 "crawl_repository"
             ]
         },
-        "analyzer.parser.py": {
+        "analyzer/parser.py": {
+            "language": "python",
             "imports": [
                 "ast",
                 "json",
@@ -83,11 +90,13 @@
                 "parse_python_file"
             ]
         },
-        "analyzer.repo_graph.py": {
+        "analyzer/repo_graph.py": {
+            "language": "python",
             "imports": [
                 "os",
                 "ast",
                 "json",
+                "re",
                 "typing"
             ],
             "classes": {
@@ -105,10 +114,12 @@
                 }
             },
             "standalone_functions": [
+                "parse_js_ts_file",
                 "generate_repository_graph"
             ]
         },
-        "analyzer.vector_store.py": {
+        "analyzer/vector_store.py": {
+            "language": "python",
             "imports": [
                 "os",
                 "chromadb",
