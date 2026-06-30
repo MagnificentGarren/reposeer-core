@@ -1,0 +1,124 @@
+{
+    "project_root": "reposeer-core",
+    "directory_tree": {
+        "root": [
+            "chat_interface.py"
+        ],
+        "agents": [
+            "orchestrator.py"
+        ],
+        "analyzer": [
+            "crawler.py",
+            "parser.py",
+            "repo_graph.py",
+            "vector_store.py"
+        ],
+        "docs": []
+    },
+    "modules": {
+        "chat_interface.py": {
+            "imports": [
+                "sys",
+                "random",
+                "agents.orchestrator",
+                "storage.memory_ledger"
+            ],
+            "classes": {},
+            "standalone_functions": [
+                "display_welcome_banner",
+                "setup_session",
+                "launch_chat_engine"
+            ]
+        },
+        "agents.orchestrator.py": {
+            "imports": [
+                "os",
+                "typing",
+                "dotenv",
+                "google",
+                "langgraph.graph",
+                "chromadb",
+                "google.genai",
+                "storage.memory_ledger",
+                "json",
+                "google.genai",
+                "storage.memory_ledger"
+            ],
+            "classes": {
+                "AgentState": {
+                    "methods": [],
+                    "base_classes": [
+                        "TypedDict"
+                    ]
+                }
+            },
+            "standalone_functions": [
+                "router_node",
+                "doc_agent_node",
+                "reviewer_node",
+                "interviewer_agent_node",
+                "mode_router",
+                "execution_router"
+            ]
+        },
+        "analyzer.crawler.py": {
+            "imports": [
+                "os",
+                "analyzer.parser",
+                "json"
+            ],
+            "classes": {},
+            "standalone_functions": [
+                "crawl_repository"
+            ]
+        },
+        "analyzer.parser.py": {
+            "imports": [
+                "ast",
+                "json",
+                "os"
+            ],
+            "classes": {},
+            "standalone_functions": [
+                "parse_python_file"
+            ]
+        },
+        "analyzer.repo_graph.py": {
+            "imports": [
+                "os",
+                "ast",
+                "json",
+                "typing"
+            ],
+            "classes": {
+                "CodebaseGraphAnalyzer": {
+                    "methods": [
+                        "__init__",
+                        "visit_Import",
+                        "visit_ImportFrom",
+                        "visit_ClassDef",
+                        "visit_FunctionDef"
+                    ],
+                    "base_classes": [
+                        "ast.NodeVisitor"
+                    ]
+                }
+            },
+            "standalone_functions": [
+                "generate_repository_graph"
+            ]
+        },
+        "analyzer.vector_store.py": {
+            "imports": [
+                "os",
+                "chromadb",
+                "analyzer.crawler"
+            ],
+            "classes": {},
+            "standalone_functions": [
+                "get_vector_collection",
+                "store_codebase_vectors"
+            ]
+        }
+    }
+}

@@ -23,6 +23,7 @@ class AgentState(TypedDict):
     query: str
     messages: List[Dict[str, str]]
     retrieved_code_vectors: List[Dict[str, Any]]
+    repo_blueprint: Dict[str, Any]
     current_draft: str
     review_feedback: str
     steps_taken: List[str]
@@ -249,17 +250,35 @@ def reviewer_node(state: AgentState) -> Dict[str, Any]:
 def interviewer_agent_node(state: AgentState) -> Dict[str, Any]:
     print(f"🎙️  Agent Node [Interviewer - Persona: {state['interviewer_persona'].upper()}]: Framing interview context...")
     
-    # 1. Fetch historical conceptual gaps from our SQLite ledger
+    # 1. Pull past weaknesses from the database
     historical_gaps = get_historical_weaknesses(limit=3)
     gap_instruction = ""
     if historical_gaps:
         gap_tags = [item["topic"] for item in historical_gaps]
-        gap_instruction = f"\nCRITICAL ADAPTIVE BIAS: The candidate has historically struggled with: {', '.join(gap_tags)}. Tailor this question to subtly probe their knowledge of these domains."
+        gap_instruction = f"\nCRITICAL ADAPTIVE BIAS: The candidate has historically struggled with: {', '.join(gap_tags)}. Subtlely target these domains."
+
+    # 2. Extract structural hints out of our repository blueprint graph map
+    blueprint = state.get("repo_blueprint", {})
+    structural_context = ""
+    if blueprint and "modules" in blueprint:
+        # Provide a high-level summary list of actual project files and symbols to the LLM context window
+        module_summary = []
+        for mod, details in list(blueprint["modules"].items())[:8]:  # Keep context window clean
+            classes = list(details.get("classes", {}).keys())
+            funcs = details.get("standalone_functions", [])
+            module_summary.append(f"Module '{mod}' contains Classes: {classes}, Standalone Functions: {funcs}")
+        
+        structural_context = (
+            f"\nACTUAL REPOSITORY ARCHITECTURE STRUCTURE:\n"
+            f"{chr(10).join(module_summary)}\n"
+            f"Formulate questions that challenge the candidate to explain how these modules connect, "
+            f"their design patterns (e.g., repository patterns, state machines), or architectural trade-offs."
+        )
 
     persona_prompts = {
-        "collaborator": "You are 'The Helpful Collaborator', a friendly pair-programmer. Guide the candidate gently, give conceptual hints if they struggle, and treat this like a team project.",
-        "traditionalist": "You are 'The Strict Traditionalist', a zero-fluff algorithm purist. Speak concisely, stay cold and objective, and focus heavily on raw syntax rules and alternative refactoring limits.",
-        "architect": "You are 'The Pragmatic Architect', a production startup tech lead. Focus strictly on real-world constraints, scalability bottlenecks, deployment costs, and operational safety."
+        "collaborator": "You are 'The Helpful Collaborator', a friendly pair-programmer. Guide the candidate gently, give conceptual hints, and treat this like a team project.",
+        "traditionalist": "You are 'The Strict Traditionalist', an algorithm purist. Speak concisely, stay cold, and focus heavily on raw syntax rules, decoupling mechanics, and optimal design patterns.",
+        "architect": "You are 'The Pragmatic Architect', a production startup tech lead. Focus strictly on real-world constraints, scalability bottlenecks, deployment friction, and operational safety."
     }
 
     base_persona = persona_prompts.get(state["interviewer_persona"], "You are an expert technical interviewer.")
@@ -268,11 +287,11 @@ def interviewer_agent_node(state: AgentState) -> Dict[str, Any]:
         f"{base_persona}\n"
         f"Your target difficulty level is set to: {state['difficulty'].upper()}.\n"
         f"Your goal is to formulate and output ONLY the text for Question #{state['current_question_index']} of 5 "
-        f"directed at testing the candidate's understanding of their repository components.{gap_instruction}\n"
+        f"testing the candidate's understanding of their specific repository architecture.{gap_instruction}{structural_context}\n"
         f"Do not include grading metrics or conversational meta-commentary."
     )
     
-    mock_trigger_prompt = f"Generate interview question #{state['current_question_index']} based on the indexed project context."
+    mock_trigger_prompt = f"Generate interview question #{state['current_question_index']} based on the verified structural project context."
     
     response = ai_client.models.generate_content(
         model='gemini-2.5-flash',

@@ -1,6 +1,8 @@
 import sys
 import random
 from agents.orchestrator import orchestrator_app
+import os
+import json
 
 def display_welcome_banner():
     print("\n" + "=" * 75)
@@ -89,11 +91,21 @@ def launch_chat_engine():
 
             print("\n⚙️  Processing response through agent nodes...")
             
+            # 🎯 DYNAMIC BLUEPRINT INJECTION: Always load fresh structure on every loop pass
+            blueprint_data = {}
+            if os.path.exists("repo_blueprint.json"):
+                try:
+                    with open("repo_blueprint.json", "r", encoding="utf-8") as f:
+                        blueprint_data = json.load(f)
+                except Exception as e:
+                    print(f"  ↳ ⚠️  [State Sync Warning]: Could not parse repo_blueprint.json: {e}")
+
             # Map out state payload config per turn, pulling from running scores array cache
             input_state = {
                 "query": user_query,
                 "messages": conversation_history,
                 "retrieved_code_vectors": [],
+                "repo_blueprint": blueprint_data,  # ◄── Graph Map injected right here
                 "current_draft": "",
                 "review_feedback": "",
                 "steps_taken": [],
