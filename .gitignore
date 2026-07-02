@@ -1,19 +1,46 @@
-# Byte-compiled / optimized / DLL support
+# =====================================================================
+# Reposeer Core Workspace Exclusions
+# =====================================================================
+
+# Python Byte-compiled / optimized / DLL support
 __pycache__/
 *.py[cod]
 *$py.class
+*.manifest
+*.spec
 
-# Environments
+# Python Virtual Environments
 .env
 .venv
 env/
 venv/
 ENV/
+env.bak/
+venv.bak/
 
-# Project-specific local databases (ChromaDB cache & storage)
+# Project-specific Local Databases & Vector Stores
+storage/reposeer_profile.db
 chroma_db_data/
 .cache/
+*.db
+*.sqlite3
 
-# IDE / Editor configuration folders
+# Node / Next.js Dependencies & Builds
+studio/node_modules/
+studio/.next/
+studio/out/
+node_modules/
+.next/
+
+# IDE / Editor Configuration Folders
 .vscode/
 .idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# OS System Files
+.DS_Store
+Thumbs.db

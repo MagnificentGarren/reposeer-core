@@ -1,13 +1,14 @@
 import os
+import time
 from typing import TypedDict, List, Dict, Any
 from dotenv import load_dotenv
 from google import genai
+from google.genai.errors import APIError
 from langgraph.graph import StateGraph, END
 import chromadb
 from google.genai import types
 from storage.memory_ledger import get_historical_weaknesses
 import json
-from google.genai import types  # Ensure you import types at the top for schemas
 from storage.memory_ledger import log_completed_session
 
 # Explicitly execute the environment variable loader
@@ -196,29 +197,46 @@ def reviewer_node(state: AgentState) -> Dict[str, Any]:
                 
         user_prompt = f"Question Asked: {last_question}\nCandidate's Answer: {state['query']}"
         
-        try:
-            eval_response = ai_client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=user_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=(
-                        "You are an elite corporate technical evaluation board. Evaluate the candidate's answer "
-                        "against professional standards. Grade out of 10 and map performance directly to the "
-                        "individual technical category percentages."
-                    ),
-                    response_mime_type="application/json",
-                    response_schema=eval_schema
+        fallback_eval_data = {
+            "score": 5,
+            "critique": "Evaluation model temporarily rate-limited. Progress preserved.",
+            "architecture_percentage": 50,
+            "backend_logic_percentage": 50,
+            "security_percentage": 50,
+            "databases_percentage": 50,
+            "scalability_percentage": 50,
+            "flagged_weaknesses": []
+        }
+
+        eval_data = None
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                eval_response = ai_client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=user_prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=(
+                            "You are an elite corporate technical evaluation board. Evaluate the candidate's answer "
+                            "against professional standards. Grade out of 10 and map performance directly to the "
+                            "individual technical category percentages."
+                        ),
+                        response_mime_type="application/json",
+                        response_schema=eval_schema
+                    )
                 )
-            )
-            eval_data = json.loads(eval_response.text)
-        except Exception as e:
-            print(f"  ↳ ⚠️ Structured evaluation failed, falling back: {e}")
-            eval_data = {
-                "score": 5, "critique": "Fallback calculation applied.",
-                "architecture_percentage": 50, "backend_logic_percentage": 50,
-                "security_percentage": 50, "databases_percentage": 50, "scalability_percentage": 50,
-                "flagged_weaknesses": []
-            }
+                eval_data = json.loads(eval_response.text)
+                break
+            except (APIError, Exception) as e:
+                print(f"  ⚠️ Attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                else:
+                    print("  ❌ Max retries reached. Injecting safe default telemetry baseline.")
+                    eval_data = fallback_eval_data
+
+        if eval_data is None:
+            eval_data = fallback_eval_data
 
         # Re-format text output for terminal printing display comfort
         raw_evaluation_output = (
@@ -305,63 +323,114 @@ def interviewer_agent_node(state: AgentState) -> Dict[str, Any]:
     }
 
 # =====================================================================
-# LangGraph Routing & Compilation Architecture
+# Optimized LangGraph Routing & Conversation State Machine
 # =====================================================================
 
 def mode_router(state: AgentState) -> str:
     """
-    Splits application entry execution track paths based on session parameters.
+    Directs the initial routing track.
     """
+    # If it's an interview session, let the evaluation router determine the node path
     if state.get("session_mode") == "interview":
-        return "generate_interview_turn"
+        # First turn initialization bypasses grading
+        if "INITIALIZE_INTERVIEW_SESSION" in state["query"] or state.get("current_question_index", 1) == 1:
+            return "generate_interview_turn"
+        return "evaluate_quality"
+        
     return "write_docs"
 
-def execution_router(state: AgentState) -> str:
+def post_evaluation_router(state: AgentState) -> str:
     """
-    Evaluates state flags to choose the next node path.
+    Determines where to route after an evaluation node finishes processing.
     """
     if state.get("session_mode") == "interview":
-        return "end"
-        
-    if state.get("current_draft") and not state.get("review_feedback"):
-        return "end"
+        # If the candidate has not finished all 5 questions, loop back to generate the next question
+        if state.get("current_question_index", 1) <= 5:
+            return "generate_interview_turn"
+        else:
+            # Session complete! Build the metadata and summary scores expected by the ledger
+            evaluation_scores = state.get("evaluation_scores", [])
+            category_scores = {
+                "architecture": 50.0,
+                "backend_logic": 50.0,
+                "security": 50.0,
+                "databases": 50.0,
+                "scalability": 50.0
+            }
+            weaknesses = []
+            count = 0
+
+            for entry in evaluation_scores:
+                payload = entry.get("json_payload") or {}
+                if payload:
+                    count += 1
+                    category_scores["architecture"] += payload.get("architecture_percentage", 50)
+                    category_scores["backend_logic"] += payload.get("backend_logic_percentage", 50)
+                    category_scores["security"] += payload.get("security_percentage", 50)
+                    category_scores["databases"] += payload.get("databases_percentage", 50)
+                    category_scores["scalability"] += payload.get("scalability_percentage", 50)
+                    weaknesses.extend(payload.get("flagged_weaknesses", []))
+
+            if count > 0:
+                category_scores = {k: v / count for k, v in category_scores.items()}
+
+            weaknesses = [w.strip().lower() for w in set(weaknesses) if w and isinstance(w, str)]
+
+            metadata = {
+                "session_mode": state.get("session_mode", "interview"),
+                "difficulty": state.get("difficulty", "medium"),
+                "interviewer_persona": state.get("interviewer_persona", "architect")
+            }
+
+            try:
+                log_completed_session(metadata, category_scores, weaknesses)
+            except Exception as log_error:
+                print(f"  ⚠️ Failed to persist completed session: {log_error}")
+            return "end"
+            
+    # Documentation QC loop logic falls back here
     if state.get("review_feedback"):
         return "write_docs"
-    return "write_docs"
+    return "end"
 
 # 1. Initialize the State Graph Blueprint
 workflow = StateGraph(AgentState)
 
-# 2. Register Processing Nodes (Including Interviewer Component)
+# 2. Register Processing Nodes
 workflow.add_node("route_and_fetch", router_node)
 workflow.add_node("write_docs", doc_agent_node)
 workflow.add_node("evaluate_quality", reviewer_node)
 workflow.add_node("generate_interview_turn", interviewer_agent_node)
 
-# 3. Configure Structural Edge Flows
+# 3. Configure Edge Flows
 workflow.set_entry_point("route_and_fetch")
 
-# Dynamic execution branch selector edge
+# Route conditionally from start point
 workflow.add_conditional_edges(
     "route_and_fetch",
     mode_router,
     {
         "write_docs": "write_docs",
-        "generate_interview_turn": "generate_interview_turn"
+        "generate_interview_turn": "generate_interview_turn",
+        "evaluate_quality": "evaluate_quality"
     }
 )
 
+# Connect intermediate nodes to the evaluator
 workflow.add_edge("write_docs", "evaluate_quality")
-workflow.add_edge("generate_interview_turn", "evaluate_quality")
 
-# Inject Conditional Routing Decisions for Completion Tracking
+# In interview mode, once an evaluation turn completes, look ahead to determine if we loop or end
 workflow.add_conditional_edges(
     "evaluate_quality",
-    execution_router,
+    post_evaluation_router,
     {
+        "generate_interview_turn": "generate_interview_turn",
         "write_docs": "write_docs",
         "end": END
     }
 )
+
+# Crucial fix: Once the interviewer node asks a question, wrap the state response turn back to the user
+workflow.add_edge("generate_interview_turn", END)
 
 orchestrator_app = workflow.compile()
