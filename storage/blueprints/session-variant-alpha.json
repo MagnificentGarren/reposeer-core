@@ -1,0 +1,140 @@
+[
+    {
+        "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\AssetCitadel\\main.py",
+        "classes": [
+            {
+                "name": "UserRegister",
+                "docstring": null,
+                "methods": []
+            },
+            {
+                "name": "Token",
+                "docstring": null,
+                "methods": []
+            },
+            {
+                "name": "AccountCreateRequest",
+                "docstring": null,
+                "methods": []
+            },
+            {
+                "name": "JournalEntryRequest",
+                "docstring": null,
+                "methods": []
+            },
+            {
+                "name": "TransactionRequest",
+                "docstring": null,
+                "methods": []
+            },
+            {
+                "name": "JournalEntryResponse",
+                "docstring": null,
+                "methods": []
+            }
+        ],
+        "standalone_functions": [
+            {
+                "name": "get_db",
+                "args": [],
+                "docstring": "Yields a clean database connection from our managed thread pool.",
+                "source_code": "def get_db():\n    \"\"\"Yields a clean database connection from our managed thread pool.\"\"\"\n    conn = db_pool.connection()\n    try:\n        yield conn\n    finally:\n        conn.close()"
+            },
+            {
+                "name": "get_current_user_id",
+                "args": [
+                    "token",
+                    "conn"
+                ],
+                "docstring": "Verifies incoming JWT tokens and validates that the user exists in our DB layout.",
+                "source_code": "def get_current_user_id(token: str=Depends(oauth2_scheme), conn=Depends(get_db)) -> uuid.UUID:\n    \"\"\"Verifies incoming JWT tokens and validates that the user exists in our DB layout.\"\"\"\n    try:\n        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])\n        email: str = payload.get('sub')\n        if email is None:\n            raise HTTPException(status_code=401, detail='Token validation payload failed.')\n    except jwt.PyJWTError:\n        raise HTTPException(status_code=401, detail='Token has expired or is corrupt.')\n    cursor = conn.cursor()\n    cursor.execute('SELECT id FROM users WHERE email = %s;', (email,))\n    user_record = cursor.fetchone()\n    cursor.close()\n    if not user_record:\n        raise HTTPException(status_code=404, detail='User account no longer found within database context.')\n    return user_record[0]"
+            },
+            {
+                "name": "register_user",
+                "args": [
+                    "user",
+                    "conn"
+                ],
+                "docstring": null,
+                "source_code": "@app.post('/register', status_code=status.HTTP_201_CREATED)\ndef register_user(user: UserRegister, conn=Depends(get_db)):\n    cursor = conn.cursor()\n    cursor.execute('SELECT id FROM users WHERE email = %s;', (user.email,))\n    if cursor.fetchone():\n        cursor.close()\n        raise HTTPException(status_code=400, detail='Email is already registered inside the citadel.')\n    hashed_password = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')\n    try:\n        cursor.execute('INSERT INTO users (email, password_hash) VALUES (%s, %s);', (user.email, hashed_password))\n        conn.commit()\n        return {'status': 'success', 'message': 'User securely registered into database.'}\n    except Exception as e:\n        conn.rollback()\n        raise HTTPException(status_code=500, detail=f'Database execution error: {str(e)}')\n    finally:\n        cursor.close()"
+            },
+            {
+                "name": "login_for_access_token",
+                "args": [
+                    "form_data",
+                    "conn"
+                ],
+                "docstring": null,
+                "source_code": "@app.post('/token', response_model=Token)\ndef login_for_access_token(form_data: OAuth2PasswordRequestForm=Depends(), conn=Depends(get_db)):\n    cursor = conn.cursor()\n    cursor.execute('SELECT id, password_hash FROM users WHERE email = %s;', (form_data.username,))\n    user_record = cursor.fetchone()\n    cursor.close()\n    if not user_record or not pwd_context.verify(form_data.password, str(user_record[1])):\n        raise HTTPException(status_code=401, detail='Invalid security credentials provided.')\n    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)\n    to_encode = {'sub': form_data.username, 'exp': expire}\n    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)\n    return {'access_token': encoded_jwt, 'token_type': 'bearer'}"
+            },
+            {
+                "name": "create_ledger_account",
+                "args": [
+                    "account_data",
+                    "user_id",
+                    "conn"
+                ],
+                "docstring": "Initializes a new isolated financial asset, liability, or equity bucket with a target currency tag.",
+                "source_code": "@app.post('/accounts', status_code=status.HTTP_201_CREATED)\ndef create_ledger_account(account_data: AccountCreateRequest, user_id: uuid.UUID=Depends(get_current_user_id), conn=Depends(get_db)):\n    \"\"\"Initializes a new isolated financial asset, liability, or equity bucket with a target currency tag.\"\"\"\n    valid_types = {'Asset', 'Liability', 'Equity', 'Revenue', 'Expense'}\n    if account_data.type.capitalize() not in valid_types:\n        raise HTTPException(status_code=400, detail=f\"Invalid ledger type. Must be one of: {', '.join(valid_types)}\")\n    cursor = conn.cursor()\n    account_id = uuid.uuid4()\n    currency_code = account_data.currency.upper()[:3]\n    try:\n        cursor.execute('INSERT INTO accounts (id, user_id, name, type, currency) \\n               VALUES (%s, %s, %s, %s, %s);', (str(account_id), str(user_id), account_data.name, account_data.type.capitalize(), currency_code))\n        conn.commit()\n        return {'status': 'success', 'message': f'Ledger account bucket [{currency_code}] securely established.', 'account_id': account_id, 'account_name': account_data.name, 'currency': currency_code}\n    except Exception as e:\n        conn.rollback()\n        raise HTTPException(status_code=500, detail=f'Failed to create asset bucket: {str(e)}')\n    finally:\n        cursor.close()"
+            },
+            {
+                "name": "post_balanced_transaction",
+                "args": [
+                    "tx_data",
+                    "user_id",
+                    "conn"
+                ],
+                "docstring": "Enforces strict banking validation: entries must balance to 0 AND accounts must have sufficient liquidity.",
+                "source_code": "@app.post('/transactions', status_code=status.HTTP_201_CREATED)\ndef post_balanced_transaction(tx_data: TransactionRequest, user_id: uuid.UUID=Depends(get_current_user_id), conn=Depends(get_db)):\n    \"\"\"Enforces strict banking validation: entries must balance to 0 AND accounts must have sufficient liquidity.\"\"\"\n    net_sum = sum((entry.amount for entry in tx_data.entries))\n    if net_sum != 0:\n        raise HTTPException(status_code=400, detail=f'Transaction processing rejected: Unbalanced entries. Total net sum is {net_sum} cents. Must equal exactly 0.')\n    cursor = conn.cursor()\n    transaction_id = uuid.uuid4()\n    try:\n        for entry in tx_data.entries:\n            cursor.execute('SELECT type FROM accounts WHERE id = %s AND user_id = %s;', (str(entry.account_id), str(user_id)))\n            account_record = cursor.fetchone()\n            if not account_record:\n                raise HTTPException(status_code=403, detail=f'Access denied: Target account context {entry.account_id} is missing or belongs to another client.')\n            account_type = account_record[0]\n            if account_type == 'Asset' and entry.amount < 0:\n                balance_query = '\\n                    SELECT COALESCE(SUM(amount), 0) \\n                    FROM journal_entries \\n                    WHERE account_id = %s;\\n                '\n                cursor.execute(balance_query, (str(entry.account_id),))\n                current_balance = cursor.fetchone()[0]\n                if current_balance + entry.amount < 0:\n                    raise HTTPException(status_code=400, detail=f'Transaction rejected: Insufficient funds in Asset account {entry.account_id}. Current Balance: {current_balance} cents. Attempted withdrawal: {abs(entry.amount)} cents.')\n        for entry in tx_data.entries:\n            cursor.execute('INSERT INTO journal_entries (transaction_id, account_id, description, amount) \\n                   VALUES (%s, %s, %s, %s);', (str(transaction_id), str(entry.account_id), entry.description, entry.amount))\n        conn.commit()\n        return {'status': 'success', 'transaction_id': transaction_id, 'entries_logged': len(tx_data.entries)}\n    except HTTPException:\n        conn.rollback()\n        raise\n    except Exception as e:\n        conn.rollback()\n        raise HTTPException(status_code=500, detail=f'Database operational failure: {str(e)}')\n    finally:\n        cursor.close()"
+            },
+            {
+                "name": "get_account_balances",
+                "args": [
+                    "user_id",
+                    "conn"
+                ],
+                "docstring": "Computes real-time financial positions across all user asset buckets segmented by currency tag.",
+                "source_code": "@app.get('/balances')\ndef get_account_balances(user_id: uuid.UUID=Depends(get_current_user_id), conn=Depends(get_db)):\n    \"\"\"Computes real-time financial positions across all user asset buckets segmented by currency tag.\"\"\"\n    cursor = conn.cursor()\n    query = '\\n        SELECT a.id, a.name, a.type, a.currency, COALESCE(SUM(j.amount), 0) as current_balance\\n        FROM accounts a\\n        LEFT JOIN journal_entries j ON a.id = j.account_id\\n        WHERE a.user_id = %s\\n        GROUP BY a.id, a.name, a.type, a.currency;\\n    '\n    cursor.execute(query, (str(user_id),))\n    records = cursor.fetchall()\n    cursor.close()\n    balances_report = []\n    for row in records:\n        balances_report.append({'account_id': row[0], 'account_name': row[1], 'account_type': row[2], 'currency': row[3], 'balance_raw_cents': row[4], 'balance_formatted': f'{row[3]} ${row[4] / 100:,.2f}' if row[3] != 'BTC' else f'\u20bf{row[4] / 100000000:,.8f}'})\n    return {'user_id': user_id, 'ledger_positions': balances_report}"
+            },
+            {
+                "name": "get_transaction_history",
+                "args": [
+                    "limit",
+                    "offset",
+                    "user_id",
+                    "conn"
+                ],
+                "docstring": "Retrieves a paginated chronological audit log of all financial ledger items belonging to the client.",
+                "source_code": "@app.get('/transactions', response_model=List[JournalEntryResponse])\ndef get_transaction_history(limit: int=20, offset: int=0, user_id: uuid.UUID=Depends(get_current_user_id), conn=Depends(get_db)):\n    \"\"\"Retrieves a paginated chronological audit log of all financial ledger items belonging to the client.\"\"\"\n    cursor = conn.cursor()\n    query = '\\n        SELECT j.id, j.transaction_id, j.account_id, a.name, j.description, j.amount\\n        FROM journal_entries j\\n        JOIN accounts a ON j.account_id = a.id\\n        WHERE a.user_id = %s\\n        ORDER BY j.id DESC\\n        LIMIT %s OFFSET %s;\\n    '\n    try:\n        cursor.execute(query, (str(user_id), limit, offset))\n        records = cursor.fetchall()\n        history = []\n        for row in records:\n            history.append({'entry_id': uuid.UUID(row[0]), 'transaction_id': uuid.UUID(row[1]), 'account_id': uuid.UUID(row[2]), 'account_name': row[3], 'description': row[4], 'amount_cents': row[5], 'amount_formatted': f'${row[5] / 100:,.2f}'})\n        return history\n    except Exception as e:\n        raise HTTPException(status_code=500, detail=f'Failed to fetch transaction history: {str(e)}')\n    finally:\n        cursor.close()"
+            },
+            {
+                "name": "reverse_existing_transaction",
+                "args": [
+                    "transaction_id",
+                    "user_id",
+                    "conn"
+                ],
+                "docstring": "Automatically compiles and posts an exact mathematical counter-reversal for a past transaction.",
+                "source_code": "@app.post('/transactions/{transaction_id}/reverse', status_code=status.HTTP_201_CREATED)\ndef reverse_existing_transaction(transaction_id: uuid.UUID, user_id: uuid.UUID=Depends(get_current_user_id), conn=Depends(get_db)):\n    \"\"\"Automatically compiles and posts an exact mathematical counter-reversal for a past transaction.\"\"\"\n    cursor = conn.cursor()\n    lookup_query = '\\n        SELECT j.account_id, j.description, j.amount \\n        FROM journal_entries j\\n        JOIN accounts a ON j.account_id = a.id\\n        WHERE j.transaction_id = %s AND a.user_id = %s;\\n    '\n    try:\n        cursor.execute(lookup_query, (str(transaction_id), str(user_id)))\n        lines = cursor.fetchall()\n        if not lines:\n            raise HTTPException(status_code=404, detail='Target transaction context not found or access is unauthorized.')\n        new_reversal_id = uuid.uuid4()\n        for line in lines:\n            account_id = line[0]\n            original_description = line[1]\n            original_amount = line[2]\n            reversed_amount = -original_amount\n            reversal_description = f'REVERSAL OF [{transaction_id}]: {original_description}'\n            cursor.execute('INSERT INTO journal_entries (transaction_id, account_id, description, amount) \\n                   VALUES (%s, %s, %s, %s);', (str(new_reversal_id), str(account_id), reversal_description, reversed_amount))\n        conn.commit()\n        return {'status': 'success', 'message': 'Transaction historically canceled out via immutable counter-entry.', 'reversal_transaction_id': new_reversal_id}\n    except HTTPException:\n        conn.rollback()\n        raise\n    except Exception as e:\n        conn.rollback()\n        raise HTTPException(status_code=500, detail=f'Reversal compiler failed: {str(e)}')\n    finally:\n        cursor.close()"
+            },
+            {
+                "name": "get_balance_sheet_report",
+                "args": [
+                    "user_id",
+                    "conn"
+                ],
+                "docstring": "Generates a structured balance sheet verifying that Assets = Liabilities + Equity across all tracked currencies.",
+                "source_code": "@app.get('/reports/balance-sheet')\ndef get_balance_sheet_report(user_id: uuid.UUID=Depends(get_current_user_id), conn=Depends(get_db)):\n    \"\"\"Generates a structured balance sheet verifying that Assets = Liabilities + Equity across all tracked currencies.\"\"\"\n    cursor = conn.cursor()\n    query = \"\\n        SELECT a.type, a.currency, COALESCE(SUM(j.amount), 0) as total_cents\\n        FROM accounts a\\n        LEFT JOIN journal_entries j ON a.id = j.account_id\\n        WHERE a.user_id = %s AND a.type IN ('Asset', 'Liability', 'Equity')\\n        GROUP BY a.type, a.currency;\\n    \"\n    try:\n        cursor.execute(query, (str(user_id),))\n        records = cursor.fetchall()\n        report = {}\n        for row in records:\n            acct_type, currency, total = (row[0], row[1], row[2])\n            if currency not in report:\n                report[currency] = {'assets': 0, 'liabilities': 0, 'equity': 0, 'equation_balanced': False}\n            if acct_type == 'Asset':\n                report[currency]['assets'] = total\n            elif acct_type == 'Liability':\n                report[currency]['liabilities'] = total\n            elif acct_type == 'Equity':\n                report[currency]['equity'] = total\n        for curr, balances in report.items():\n            if balances['assets'] == balances['liabilities'] + balances['equity']:\n                balances['equation_balanced'] = True\n        return {'user_id': user_id, 'balance_sheet_by_currency': report}\n    except Exception as e:\n        raise HTTPException(status_code=500, detail=f'Failed to compile balance sheet: {str(e)}')\n    finally:\n        cursor.close()"
+            },
+            {
+                "name": "get_income_statement_report",
+                "args": [
+                    "user_id",
+                    "conn"
+                ],
+                "docstring": "Computes operational net profit or loss by subtracting total expenses from total revenues.",
+                "source_code": "@app.get('/reports/income-statement')\ndef get_income_statement_report(user_id: uuid.UUID=Depends(get_current_user_id), conn=Depends(get_db)):\n    \"\"\"Computes operational net profit or loss by subtracting total expenses from total revenues.\"\"\"\n    cursor = conn.cursor()\n    query = \"\\n        SELECT a.type, a.currency, COALESCE(SUM(j.amount), 0) as total_cents\\n        FROM accounts a\\n        LEFT JOIN journal_entries j ON a.id = j.account_id\\n        WHERE a.user_id = %s AND a.type IN ('Revenue', 'Expense')\\n        GROUP BY a.type, a.currency;\\n    \"\n    try:\n        cursor.execute(query, (str(user_id),))\n        records = cursor.fetchall()\n        report = {}\n        for row in records:\n            acct_type, currency, total = (row[0], row[1], row[2])\n            if currency not in report:\n                report[currency] = {'total_revenue_cents': 0, 'total_expense_cents': 0, 'net_income_cents': 0}\n            if acct_type == 'Revenue':\n                report[currency]['total_revenue_cents'] = total\n            elif acct_type == 'Expense':\n                report[currency]['total_expense_cents'] = total\n        for curr, flows in report.items():\n            flows['net_income_cents'] = flows['total_revenue_cents'] - flows['total_expense_cents']\n            flows['net_income_formatted'] = f\"{curr} ${flows['net_income_cents'] / 100:,.2f}\"\n        return {'user_id': user_id, 'income_statement_by_currency': report}\n    except Exception as e:\n        raise HTTPException(status_code=500, detail=f'Failed to compile income statement: {str(e)}')\n    finally:\n        cursor.close()"
+            }
+        ]
+    }
+]

@@ -1,0 +1,905 @@
+{
+    "repo_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core",
+    "files": {
+        "app.py": {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\app.py",
+            "classes": [
+                {
+                    "name": "ChatMessage",
+                    "docstring": null,
+                    "methods": []
+                },
+                {
+                    "name": "RepoSelectPayload",
+                    "docstring": null,
+                    "methods": []
+                }
+            ],
+            "standalone_functions": [
+                {
+                    "name": "get_telemetry_data",
+                    "args": [],
+                    "docstring": "Aggregates local database logs and code architecture blueprints.",
+                    "source_code": "@app.get('/api/telemetry')\ndef get_telemetry_data():\n    \"\"\"Aggregates local database logs and code architecture blueprints.\"\"\"\n    response_data = {'blueprint': {}, 'metrics': {'Architecture': 0.0, 'Backend Logic': 0.0, 'Security': 0.0, 'Databases': 0.0, 'Scalability': 0.0}, 'weaknesses': []}\n    if os.path.exists(BLUEPRINT_PATH):\n        try:\n            with open(BLUEPRINT_PATH, 'r', encoding='utf-8') as f:\n                response_data['blueprint'] = json.load(f)\n        except Exception:\n            pass\n    if os.path.exists(DB_PATH):\n        try:\n            conn = sqlite3.connect(DB_PATH)\n            cursor = conn.cursor()\n            cursor.execute('\\n                SELECT \\n                    AVG(architecture_score), AVG(backend_logic_score), \\n                    AVG(security_score), AVG(database_score), AVG(scalability_score) \\n                FROM session_metrics\\n            ')\n            row = cursor.fetchone()\n            if row and row[0] is not None:\n                response_data['metrics'] = {'Architecture': round(row[0], 1), 'Backend Logic': round(row[1], 1), 'Security': round(row[2], 1), 'Databases': round(row[3], 1), 'Scalability': round(row[4], 1)}\n            cursor.execute('SELECT DISTINCT topic_tag FROM concept_weaknesses')\n            response_data['weaknesses'] = [tag[0] for tag in cursor.fetchall()]\n            conn.close()\n        except Exception:\n            pass\n    return response_data"
+                },
+                {
+                    "name": "select_and_scan_repository",
+                    "args": [
+                        "payload"
+                    ],
+                    "docstring": null,
+                    "source_code": "@app.post('/api/repo/select')\ndef select_and_scan_repository(payload: RepoSelectPayload):\n    target_path = payload.repo_path.strip()\n    if not os.path.exists(target_path):\n        raise HTTPException(status_code=400, detail=f\"Target path layout not found on this system: '{target_path}'\")\n    try:\n        print(f'\ud83d\udcc1 Initializing deep AST crawl on target workspace: {target_path}')\n        parsed_list = crawl_repository(target_path)\n        blueprint_data = {'repo_path': target_path, 'files': {os.path.basename(item.get('file_path', 'module')): item for item in parsed_list if isinstance(item, dict)} if parsed_list and isinstance(parsed_list[0], dict) else {}, 'raw_ast_pool': parsed_list}\n        session_blueprint_dir = os.path.join('storage', 'blueprints')\n        os.makedirs(session_blueprint_dir, exist_ok=True)\n        target_blueprint_file = os.path.join(session_blueprint_dir, f'{payload.session_id}.json')\n        with open(target_blueprint_file, 'w', encoding='utf-8') as f:\n            json.dump(blueprint_data, f, indent=4)\n        print(f'\ud83d\udcbe Ingestion complete. Balanced blueprint schema written!')\n        return {'status': 'success', 'message': f'Successfully indexed workspace data at {target_path}', 'file_count': len(parsed_list) if isinstance(parsed_list, list) else 0}\n    except Exception as e:\n        raise HTTPException(status_code=500, detail=f'AST Ingestion Pipeline failed: {str(e)}')"
+                },
+                {
+                    "name": "submit_chat_turn",
+                    "args": [
+                        "payload"
+                    ],
+                    "docstring": null,
+                    "source_code": "@app.post('/api/chat/submit')\ndef submit_chat_turn(payload: ChatMessage):\n    user_input = payload.message.strip()\n    if not user_input:\n        raise HTTPException(status_code=400, detail='Input cannot be empty.')\n    try:\n        thread_id = payload.session_id if payload.session_id else 'default_session'\n        session_blueprint_file = os.path.join('storage', 'blueprints', f'{thread_id}.json')\n        repo_blueprint_data = {}\n        if os.path.exists(session_blueprint_file):\n            with open(session_blueprint_file, 'r', encoding='utf-8') as f:\n                repo_blueprint_data = json.load(f)\n        elif os.path.exists(BLUEPRINT_PATH):\n            with open(BLUEPRINT_PATH, 'r', encoding='utf-8') as f:\n                repo_blueprint_data = json.load(f)\n        config = {'configurable': {'thread_id': thread_id}}\n        current_state = orchestrator_app.get_state(config)\n        if not current_state.values:\n            active_question_index = 1\n        else:\n            last_index = current_state.values.get('current_question_index', 1)\n            active_question_index = last_index + 1\n        print(f'\ud83d\udce1 Checkpointer Thread: {thread_id} | Resolved Internal State Question Index: {active_question_index}')\n        inputs = {'query': user_input, 'messages': [{'role': 'user', 'content': user_input}], 'retrieved_code_vectors': [], 'repo_blueprint': repo_blueprint_data, 'session_mode': 'interview', 'difficulty': 'medium', 'interviewer_persona': 'architect', 'current_question_index': active_question_index}\n        final_output = orchestrator_app.invoke(inputs, config=config)\n        if active_question_index >= 6:\n            agent_reply = '### \ud83c\udf93 Interview Session Complete!\\n\\nThank you for completing the Reposeer Core architectural evaluation. Your responses have been compiled, graded, and synced to your local telemetry ledger. You can now view your updated competency metrics matrix in the sidebar panel.'\n        else:\n            agent_reply = final_output.get('current_draft') or 'Next question initializing...'\n        return {'status': 'success', 'reply': agent_reply}\n    except Exception as e:\n        raise HTTPException(status_code=500, detail=f'Graph Engine Error: {str(e)}')"
+                }
+            ],
+            "module": "app.py"
+        },
+        "chat_interface.py": {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\chat_interface.py",
+            "classes": [],
+            "standalone_functions": [
+                {
+                    "name": "display_welcome_banner",
+                    "args": [],
+                    "docstring": null,
+                    "source_code": "def display_welcome_banner():\n    print('\\n' + '=' * 75)\n    print('\ud83c\udf99\ufe0f  REPOSEER-CORE: THE INTELLIGENT TECHNICAL INTERVIEW SIMULATOR')\n    print('    Prepare for code reviews, technical rounds, and engineering panels.')\n    print('=' * 75)"
+                },
+                {
+                    "name": "setup_session",
+                    "args": [],
+                    "docstring": "Prompts the user to select their track, difficulty level, \nand randomly configures an interviewer personality if needed.",
+                    "source_code": "def setup_session():\n    \"\"\"\n    Prompts the user to select their track, difficulty level, \n    and randomly configures an interviewer personality if needed.\n    \"\"\"\n    display_welcome_banner()\n    print('\\nSelect Your Training Track:')\n    print('  [1] Casual Mode (Study & Explore codebase freely)')\n    print('  [2] Interviewer Mode (5-Question Mock Exam simulation)')\n    while True:\n        choice = input('\\n\ud83d\udc49 Choose track (1 or 2): ').strip()\n        if choice in ['1', '2']:\n            mode = 'casual' if choice == '1' else 'interview'\n            break\n        print('\u274c Invalid selection. Please enter 1 or 2.')\n    print('\\nSelect Technical Target Difficulty:')\n    print('  [Easy]   - Core Syntax, logic flow, and basic modular components')\n    print('  [Medium] - Edge-case validation, state pipelines, and system logic')\n    print('  [Hard]   - Concurrency limits, scale bottlenecks, and deep optimizations')\n    while True:\n        diff_input = input('\\n\ud83d\udc49 Enter difficulty (easy, medium, hard): ').strip().lower()\n        if diff_input in ['easy', 'medium', 'hard']:\n            difficulty = diff_input\n            break\n        print(\"\u274c Invalid choice. Please type 'easy', 'medium', or 'hard'.\")\n    persona = 'none'\n    if mode == 'interview':\n        personas = ['collaborator', 'traditionalist', 'architect']\n        persona = random.choice(personas)\n        persona_titles = {'collaborator': '\ud83e\udd1d The Helpful Collaborator (Senior Pair-Programmer)', 'traditionalist': '\u23f1\ufe0f  The Strict Traditionalist (Algorithm Purist)', 'architect': '\ud83c\udfaf The Pragmatic Architect (Startup Tech Lead)'}\n        print('\\n' + '-' * 75)\n        print(f'\ud83d\udd12 ASSIGNED INTERVIEWER: {persona_titles[persona]}')\n        print('   They have reviewed your database indexes and are preparing questions...')\n        print('-' * 75)\n    else:\n        print('\\n' + '-' * 75)\n        print('\ud83e\udde0 CASUAL MENTOR ACTIVATED: Ask anything about your codebase files.')\n        print('-' * 75)\n    return (mode, difficulty, persona)"
+                },
+                {
+                    "name": "launch_chat_engine",
+                    "args": [],
+                    "docstring": null,
+                    "source_code": "def launch_chat_engine():\n    mode, difficulty, persona = setup_session()\n    conversation_history = []\n    running_scores = []\n    q_index = 1 if mode == 'interview' else 0\n    while True:\n        try:\n            if mode == 'interview' and q_index == 1 and (len(conversation_history) == 0):\n                print('\\n\u2699\ufe0f  Initializing mock board. Generating question 1 of 5...')\n                user_query = 'INITIALIZE_INTERVIEW_SESSION'\n            else:\n                user_query = input('\\n\ud83d\udcac You: ').strip()\n                if not user_query:\n                    continue\n                if user_query.lower() in ['exit', 'quit']:\n                    print('\\n\ud83d\udd0c Closing the simulator. Keep pushing commits. Goodbye!')\n                    break\n            print('\\n\u2699\ufe0f  Processing response through agent nodes...')\n            blueprint_data = {}\n            if os.path.exists('repo_blueprint.json'):\n                try:\n                    with open('repo_blueprint.json', 'r', encoding='utf-8') as f:\n                        blueprint_data = json.load(f)\n                except Exception as e:\n                    print(f'  \u21b3 \u26a0\ufe0f  [State Sync Warning]: Could not parse repo_blueprint.json: {e}')\n            input_state = {'query': user_query, 'messages': conversation_history, 'retrieved_code_vectors': [], 'repo_blueprint': blueprint_data, 'current_draft': '', 'review_feedback': '', 'steps_taken': [], 'session_mode': mode, 'difficulty': difficulty, 'interviewer_persona': persona, 'current_question_index': q_index, 'evaluation_scores': running_scores}\n            if user_query != 'INITIALIZE_INTERVIEW_SESSION':\n                conversation_history.append({'role': 'user', 'content': user_query})\n            final_state = orchestrator_app.invoke(input_state)\n            agent_response = final_state.get('current_draft', '\u26a0\ufe0f Error: Generation failed.')\n            conversation_history.append({'role': 'assistant', 'content': agent_response})\n            if 'evaluation_scores' in final_state:\n                running_scores = final_state['evaluation_scores']\n            print(f'\\n\ud83e\udd16 Response:')\n            print('-' * 60)\n            print(agent_response)\n            print('-' * 60)\n            if mode == 'interview':\n                if q_index >= 5:\n                    print('\\n\ud83c\udfc1 Technical evaluation round complete! Compiling your final scorecard...')\n                    print('\\n' + '=' * 75)\n                    print('\ud83d\udcca OFFICIAL REPOSEER-CORE TECHNICAL EVALUATION PERFORMANCE REPORT')\n                    print('=' * 75)\n                    avg_metrics = {'Architecture': 0.0, 'Backend Logic': 0.0, 'Security': 0.0, 'Databases': 0.0, 'Scalability': 0.0}\n                    all_weaknesses = []\n                    if running_scores:\n                        for grade in running_scores:\n                            print(f\"\\n\ud83d\udccc QUESTION #{grade['question_num']} EVALUATION:\")\n                            print(grade['raw_evaluation'])\n                            print('-' * 50)\n                            payload = grade.get('json_payload')\n                            if payload:\n                                avg_metrics['Architecture'] += payload['architecture_percentage'] / 5\n                                avg_metrics['Backend Logic'] += payload['backend_logic_percentage'] / 5\n                                avg_metrics['Security'] += payload['security_percentage'] / 5\n                                avg_metrics['Databases'] += payload['databases_percentage'] / 5\n                                avg_metrics['Scalability'] += payload['scalability_percentage'] / 5\n                                all_weaknesses.extend(payload.get('flagged_weaknesses', []))\n                        meta_payload = {'session_mode': mode, 'difficulty': difficulty, 'interviewer_persona': persona}\n                        unique_weaknesses = list(set(all_weaknesses))\n                        from storage.memory_ledger import log_completed_session\n                        log_completed_session(meta_payload, avg_metrics, unique_weaknesses)\n                        from storage.report_exporter import export_session_report\n                        export_session_report(meta_payload, avg_metrics, unique_weaknesses, running_scores)\n                    else:\n                        print('\\n\u26a0\ufe0f Note: No answer entries were recorded for scoring evaluation.')\n                    print('\\n' + '=' * 75)\n                    print('\ud83d\ude80 Keep refining your codebase architecture and pushing boundaries. Session End.')\n                    print('=' * 75)\n                    break\n                q_index += 1\n        except KeyboardInterrupt:\n            print('\\n\\n\ud83d\udd0c Session terminated via keyboard. Exiting...')\n            sys.exit(0)"
+                }
+            ],
+            "module": "chat_interface.py"
+        },
+        "orchestrator.py": {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\agents\\orchestrator.py",
+            "classes": [
+                {
+                    "name": "AgentState",
+                    "docstring": null,
+                    "methods": []
+                }
+            ],
+            "standalone_functions": [
+                {
+                    "name": "router_node",
+                    "args": [
+                        "state"
+                    ],
+                    "docstring": null,
+                    "source_code": "def router_node(state: AgentState) -> Dict[str, Any]:\n    print('\ud83e\udd16 Agent Node [Router]: Analyzing context and querying vector store...')\n    if state['query'] == 'INITIALIZE_INTERVIEW_SESSION':\n        return {'retrieved_code_vectors': [], 'steps_taken': state.get('steps_taken', []) + ['live_routed']}\n    search_query = state['query']\n    if state.get('messages') and len(state['messages']) > 1:\n        print('   \u21b3 \ud83e\udde0 Context detected. Condensing shorthand query via Gemini...')\n        chat_history_context = ''\n        for msg in state['messages'][:-1]:\n            chat_history_context += f\"{msg['role']}: {msg['content']}\\n\"\n        condensation_prompt = f\"Given the following conversation history and a new shorthand follow-up question, rewrite the new question into a standalone, descriptive search query focused on resolving the intended codebase target files or symbols.\\n\\nConversation History:\\n{chat_history_context}\\nNew Follow-up Question: {state['query']}\\n\\nOutput ONLY the optimized search string. Do not include introductory text.\"\n        try:\n            condensation_response = ai_client.models.generate_content(model='gemini-2.5-flash', contents=condensation_prompt)\n            optimized_query = condensation_response.text.strip()\n            if optimized_query:\n                search_query = optimized_query\n                print(f\"   \u21b3 Optimized Search Vector: '{search_query}'\")\n        except Exception as e:\n            print(f'   \u21b3 \u26a0\ufe0f Query condensation skipped due to error: {e}')\n    chroma_client = chromadb.PersistentClient(path='./chroma_db_data')\n    collection = chroma_client.get_collection(name='repository_methods')\n    results = collection.query(query_texts=[search_query], n_results=2)\n    retrieved_docs = []\n    if results and results['documents'] and results['documents'][0]:\n        for doc, metadata in zip(results['documents'][0], results['metadatas'][0]):\n            retrieved_docs.append({'file': metadata.get('file_path', 'unknown'), 'scope': metadata.get('scope', 'unknown'), 'symbol_name': metadata.get('symbol_name', 'unknown'), 'content': doc})\n            print(f\"   \u21b3 Extracted relevant {metadata.get('scope')}: '{metadata.get('symbol_name')}' from {metadata.get('file_path')}\")\n    if not retrieved_docs:\n        print('   \u21b3 \u26a0\ufe0f Warning: No relevant code vectors found for this query.')\n    return {'retrieved_code_vectors': retrieved_docs, 'steps_taken': state.get('steps_taken', []) + ['live_routed']}"
+                },
+                {
+                    "name": "doc_agent_node",
+                    "args": [
+                        "state"
+                    ],
+                    "docstring": null,
+                    "source_code": "def doc_agent_node(state: AgentState) -> Dict[str, Any]:\n    print('\ud83d\udcdd Agent Node [Doc Writer]: Generating production response via Gemini...')\n    code_context = ''\n    for vec in state['retrieved_code_vectors']:\n        code_context += f\"\\n--- FILE: {vec['file']} ({vec['scope']}: {vec['symbol_name']}) ---\\n{vec['content']}\\n\"\n    chat_history_context = ''\n    for msg in state.get('messages', []):\n        chat_history_context += f\"\ud83d\udc64 {msg['role'].capitalize()}: {msg['content']}\\n\"\n    system_instruction = 'You are an expert technical AI assistant linked directly to a local codebase. Your job is to provide clean, technical, and accurate code summaries or answers using the retrieved code context assets and conversation history. Always format code references within proper markdown ticks.'\n    user_prompt = ''\n    if chat_history_context:\n        user_prompt += f'Prior Conversation History:\\n{chat_history_context}\\n'\n    user_prompt += f'Code Context Assets for Current Turn:\\n{code_context}\\n\\n'\n    user_prompt += f\"Latest User Query: {state['query']}\"\n    if state.get('review_feedback'):\n        user_prompt += f\"\\n\\nCRITICAL - Previous Review Feedback to Correct:\\n{state['review_feedback']}\"\n    response = ai_client.models.generate_content(model='gemini-2.5-flash', contents=user_prompt, config={'system_instruction': system_instruction})\n    step_tag = 'documented_fixed' if state.get('review_feedback') else 'documented_initial'\n    return {'current_draft': response.text, 'review_feedback': '', 'steps_taken': state.get('steps_taken', []) + [step_tag]}"
+                },
+                {
+                    "name": "reviewer_node",
+                    "args": [
+                        "state"
+                    ],
+                    "docstring": null,
+                    "source_code": "def reviewer_node(state: AgentState) -> Dict[str, Any]:\n    steps = state.get('steps_taken', [])\n    if state.get('session_mode') == 'interview':\n        if state['query'] == 'INITIALIZE_INTERVIEW_SESSION':\n            return {'steps_taken': steps + ['interview_init_passed']}\n        print(f\"\ud83d\udd2c Agent Node [Evaluator]: Structured grading for Question {state['current_question_index'] - 1}...\")\n        eval_schema = types.Schema(type=types.Type.OBJECT, properties={'score': types.Schema(type=types.Type.INTEGER, description='Grade from 0 to 10'), 'critique': types.Schema(type=types.Type.STRING, description='Actionable 1-2 sentence technical review.'), 'architecture_percentage': types.Schema(type=types.Type.INTEGER, description='0-100 evaluation of architectural awareness.'), 'backend_logic_percentage': types.Schema(type=types.Type.INTEGER, description='0-100 evaluation of code and logic mechanics.'), 'security_percentage': types.Schema(type=types.Type.INTEGER, description='0-100 evaluation of vulnerabilities and bounds.'), 'databases_percentage': types.Schema(type=types.Type.INTEGER, description='0-100 evaluation of indexing, schemas, or data flow.'), 'scalability_percentage': types.Schema(type=types.Type.INTEGER, description='0-100 evaluation of scale, Big-O, or performance trade-offs.'), 'flagged_weaknesses': types.Schema(type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING), description=\"Lowercase concept tags candidate missed (e.g., 'indexes', 'redis caching', 'rate limiting'). Max 2.\")}, required=['score', 'critique', 'architecture_percentage', 'backend_logic_percentage', 'security_percentage', 'databases_percentage', 'scalability_percentage', 'flagged_weaknesses'])\n        last_question = 'Unknown context'\n        for msg in reversed(state.get('messages', [])):\n            if msg['role'] == 'assistant':\n                last_question = msg['content']\n                break\n        user_prompt = f\"Question Asked: {last_question}\\nCandidate's Answer: {state['query']}\"\n        fallback_eval_data = {'score': 5, 'critique': 'Evaluation model temporarily rate-limited. Progress preserved.', 'architecture_percentage': 50, 'backend_logic_percentage': 50, 'security_percentage': 50, 'databases_percentage': 50, 'scalability_percentage': 50, 'flagged_weaknesses': []}\n        eval_data = None\n        max_retries = 3\n        for attempt in range(max_retries):\n            try:\n                eval_response = ai_client.models.generate_content(model='gemini-2.5-flash', contents=user_prompt, config=types.GenerateContentConfig(system_instruction=\"You are an elite corporate technical evaluation board. Evaluate the candidate's answer against professional standards. Grade out of 10 and map performance directly to the individual technical category percentages.\", response_mime_type='application/json', response_schema=eval_schema))\n                eval_data = json.loads(eval_response.text)\n                break\n            except (APIError, Exception) as e:\n                print(f'  \u26a0\ufe0f Attempt {attempt + 1} failed: {e}')\n                if attempt < max_retries - 1:\n                    time.sleep(2)\n                else:\n                    print('  \u274c Max retries reached. Injecting safe default telemetry baseline.')\n                    eval_data = fallback_eval_data\n        if eval_data is None:\n            eval_data = fallback_eval_data\n        raw_evaluation_output = f\"SCORE: {eval_data['score']}/10\\nCRITIQUE: {eval_data['critique']}\\n\ud83d\udcca CATEGORY BREAKDOWN:\\n  \u2022 Architecture:  {eval_data['architecture_percentage']}%\\n  \u2022 Backend Logic: {eval_data['backend_logic_percentage']}%\\n  \u2022 Security:      {eval_data['security_percentage']}%\\n  \u2022 Databases:     {eval_data['databases_percentage']}%\\n  \u2022 Scalability:   {eval_data['scalability_percentage']}%\"\n        new_scores = state.get('evaluation_scores', []) + [{'question_num': state['current_question_index'] - 1, 'raw_evaluation': raw_evaluation_output, 'score': f\"{eval_data['score']}/10\", 'json_payload': eval_data}]\n        return {'evaluation_scores': new_scores, 'steps_taken': steps + ['interview_graded']}\n    print('\ud83d\udd2c Agent Node [Reviewer]: Evaluating documentation via Gemini QC...')"
+                },
+                {
+                    "name": "interviewer_agent_node",
+                    "args": [
+                        "state"
+                    ],
+                    "docstring": null,
+                    "source_code": "def interviewer_agent_node(state: AgentState) -> Dict[str, Any]:\n    print(f\"\ud83c\udf99\ufe0f  Agent Node [Interviewer - Persona: {state['interviewer_persona'].upper()}]: Framing interview context...\")\n    historical_gaps = get_historical_weaknesses(limit=3)\n    gap_instruction = ''\n    if historical_gaps:\n        gap_tags = [item['topic'] for item in historical_gaps]\n        gap_instruction = f\"\\nCRITICAL ADAPTIVE BIAS: The candidate has historically struggled with: {', '.join(gap_tags)}. Subtlely target these domains.\"\n    blueprint = state.get('repo_blueprint', {})\n    structural_context = ''\n    if blueprint and 'modules' in blueprint:\n        module_summary = []\n        for mod, details in list(blueprint['modules'].items())[:8]:\n            classes = list(details.get('classes', {}).keys())\n            funcs = details.get('standalone_functions', [])\n            module_summary.append(f\"Module '{mod}' contains Classes: {classes}, Standalone Functions: {funcs}\")\n        structural_context = f'\\nACTUAL REPOSITORY ARCHITECTURE STRUCTURE:\\n{chr(10).join(module_summary)}\\nFormulate questions that challenge the candidate to explain how these modules connect, their design patterns (e.g., repository patterns, state machines), or architectural trade-offs.'\n    persona_prompts = {'collaborator': \"You are 'The Helpful Collaborator', a friendly pair-programmer. Guide the candidate gently, give conceptual hints, and treat this like a team project.\", 'traditionalist': \"You are 'The Strict Traditionalist', an algorithm purist. Speak concisely, stay cold, and focus heavily on raw syntax rules, decoupling mechanics, and optimal design patterns.\", 'architect': \"You are 'The Pragmatic Architect', a production startup tech lead. Focus strictly on real-world constraints, scalability bottlenecks, deployment friction, and operational safety.\"}\n    base_persona = persona_prompts.get(state['interviewer_persona'], 'You are an expert technical interviewer.')\n    system_instruction = f\"{base_persona}\\nYour target difficulty level is set to: {state['difficulty'].upper()}.\\nYour goal is to formulate and output ONLY the text for Question #{state['current_question_index']} of 5 testing the candidate's understanding of their specific repository architecture.{gap_instruction}{structural_context}\\nDo not include grading metrics or conversational meta-commentary.\"\n    mock_trigger_prompt = f\"Generate interview question #{state['current_question_index']} based on the verified structural project context.\"\n    response = ai_client.models.generate_content(model='gemini-2.5-flash', contents=mock_trigger_prompt, config={'system_instruction': system_instruction})\n    return {'current_draft': response.text, 'steps_taken': state.get('steps_taken', []) + ['interviewer_question_generated']}"
+                },
+                {
+                    "name": "mode_router",
+                    "args": [
+                        "state"
+                    ],
+                    "docstring": "Directs the initial routing track.",
+                    "source_code": "def mode_router(state: AgentState) -> str:\n    \"\"\"\n    Directs the initial routing track.\n    \"\"\"\n    if state.get('session_mode') == 'interview':\n        if 'INITIALIZE_INTERVIEW_SESSION' in state['query'] or state.get('current_question_index', 1) == 1:\n            return 'generate_interview_turn'\n        return 'evaluate_quality'\n    return 'write_docs'"
+                },
+                {
+                    "name": "post_evaluation_router",
+                    "args": [
+                        "state"
+                    ],
+                    "docstring": "Determines where to route after an evaluation node finishes processing.",
+                    "source_code": "def post_evaluation_router(state: AgentState) -> str:\n    \"\"\"\n    Determines where to route after an evaluation node finishes processing.\n    \"\"\"\n    if state.get('session_mode') == 'interview':\n        if state.get('current_question_index', 1) <= 5:\n            return 'generate_interview_turn'\n        else:\n            evaluation_scores = state.get('evaluation_scores', [])\n            category_scores = {'architecture': 50.0, 'backend_logic': 50.0, 'security': 50.0, 'databases': 50.0, 'scalability': 50.0}\n            weaknesses = []\n            count = 0\n            for entry in evaluation_scores:\n                payload = entry.get('json_payload') or {}\n                if payload:\n                    count += 1\n                    category_scores['architecture'] += payload.get('architecture_percentage', 50)\n                    category_scores['backend_logic'] += payload.get('backend_logic_percentage', 50)\n                    category_scores['security'] += payload.get('security_percentage', 50)\n                    category_scores['databases'] += payload.get('databases_percentage', 50)\n                    category_scores['scalability'] += payload.get('scalability_percentage', 50)\n                    weaknesses.extend(payload.get('flagged_weaknesses', []))\n            if count > 0:\n                category_scores = {k: v / count for k, v in category_scores.items()}\n            weaknesses = [w.strip().lower() for w in set(weaknesses) if w and isinstance(w, str)]\n            metadata = {'session_mode': state.get('session_mode', 'interview'), 'difficulty': state.get('difficulty', 'medium'), 'interviewer_persona': state.get('interviewer_persona', 'architect')}\n            try:\n                log_completed_session(metadata, category_scores, weaknesses)\n            except Exception as log_error:\n                print(f'  \u26a0\ufe0f Failed to persist completed session: {log_error}')\n            return 'end'\n    if state.get('review_feedback'):\n        return 'write_docs'\n    return 'end'"
+                }
+            ],
+            "module": "agents/orchestrator.py"
+        },
+        "crawler.py": {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\analyzer\\crawler.py",
+            "classes": [],
+            "standalone_functions": [
+                {
+                    "name": "crawl_repository",
+                    "args": [
+                        "repo_path"
+                    ],
+                    "docstring": "Sifts through a directory recursively, finds all Python files,\nand runs them through our AST parser.",
+                    "source_code": "def crawl_repository(repo_path: str) -> list:\n    \"\"\"\n    Sifts through a directory recursively, finds all Python files,\n    and runs them through our AST parser.\n    \"\"\"\n    all_parsed_data = []\n    if not os.path.exists(repo_path):\n        print(f\"Error: The path '{repo_path}' does not exist.\")\n        return all_parsed_data\n    for root, dirs, files in os.walk(repo_path):\n        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['venv', '__pycache__', 'env']]\n        for file in files:\n            if file.endswith('.py'):\n                full_file_path = os.path.join(root, file)\n                print(f'Scanning: {full_file_path}')\n                file_data = parse_python_file(full_file_path)\n                module_rel = os.path.relpath(full_file_path, repo_path).replace(os.sep, '/')\n                if file_data:\n                    if isinstance(file_data, dict):\n                        file_data.setdefault('file_path', full_file_path)\n                        file_data.setdefault('module', module_rel)\n                        all_parsed_data.append(file_data)\n                    else:\n                        all_parsed_data.append({'file_path': full_file_path, 'module': module_rel, 'raw': file_data})\n    return all_parsed_data"
+                }
+            ],
+            "module": "analyzer/crawler.py"
+        },
+        "parser.py": {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\analyzer\\parser.py",
+            "classes": [],
+            "standalone_functions": [
+                {
+                    "name": "parse_python_file",
+                    "args": [
+                        "file_path"
+                    ],
+                    "docstring": "This function will read a Python file and turn its structure into data.",
+                    "source_code": "def parse_python_file(file_path: str):\n    \"\"\"\n    This function will read a Python file and turn its structure into data.\n    \"\"\"\n    with open(file_path, 'r', encoding='utf-8') as source_file:\n        source_code = source_file.read()\n    try:\n        tree = ast.parse(source_code)\n    except SyntaxError as e:\n        print(f'Skipping {file_path} due to a syntax error: {e}')\n        return None\n    file_metadata = {'file_path': file_path, 'classes': [], 'standalone_functions': []}\n    for node in tree.body:\n        if isinstance(node, ast.ClassDef):\n            class_info = {'name': node.name, 'docstring': ast.get_docstring(node), 'methods': []}\n            for sub_node in node.body:\n                if isinstance(sub_node, ast.FunctionDef):\n                    method_info = {'name': sub_node.name, 'args': [arg.arg for arg in sub_node.args.args], 'docstring': ast.get_docstring(sub_node), 'source_code': ast.unparse(sub_node)}\n                    class_info['methods'].append(method_info)\n            file_metadata['classes'].append(class_info)\n        elif isinstance(node, ast.FunctionDef):\n            func_info = {'name': node.name, 'args': [arg.arg for arg in node.args.args], 'docstring': ast.get_docstring(node), 'source_code': ast.unparse(node)}\n            file_metadata['standalone_functions'].append(func_info)\n    return file_metadata"
+                }
+            ],
+            "module": "analyzer/parser.py"
+        },
+        "repo_graph.py": {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\analyzer\\repo_graph.py",
+            "classes": [
+                {
+                    "name": "CodebaseGraphAnalyzer",
+                    "docstring": "AST visitor to map out functions, imports, and classes inside a single Python file.",
+                    "methods": [
+                        {
+                            "name": "__init__",
+                            "args": [
+                                "self",
+                                "file_path"
+                            ],
+                            "docstring": null,
+                            "source_code": "def __init__(self, file_path: str):\n    self.file_path = file_path\n    self.meta = {'language': 'python', 'imports': [], 'classes': {}, 'standalone_functions': []}\n    self.current_class = None"
+                        },
+                        {
+                            "name": "visit_Import",
+                            "args": [
+                                "self",
+                                "node"
+                            ],
+                            "docstring": null,
+                            "source_code": "def visit_Import(self, node):\n    for alias in node.names:\n        self.meta['imports'].append(alias.name)\n    self.generic_visit(node)"
+                        },
+                        {
+                            "name": "visit_ImportFrom",
+                            "args": [
+                                "self",
+                                "node"
+                            ],
+                            "docstring": null,
+                            "source_code": "def visit_ImportFrom(self, node):\n    if node.module:\n        self.meta['imports'].append(node.module)\n    self.generic_visit(node)"
+                        },
+                        {
+                            "name": "visit_ClassDef",
+                            "args": [
+                                "self",
+                                "node"
+                            ],
+                            "docstring": null,
+                            "source_code": "def visit_ClassDef(self, node):\n    class_name = node.name\n    self.meta['classes'][class_name] = {'methods': [], 'base_classes': [ast.unparse(b) for b in node.bases]}\n    self.current_class = class_name\n    self.generic_visit(node)\n    self.current_class = None"
+                        },
+                        {
+                            "name": "visit_FunctionDef",
+                            "args": [
+                                "self",
+                                "node"
+                            ],
+                            "docstring": null,
+                            "source_code": "def visit_FunctionDef(self, node):\n    func_name = node.name\n    if self.current_class:\n        self.meta['classes'][self.current_class]['methods'].append(func_name)\n    else:\n        self.meta['standalone_functions'].append(func_name)\n    self.generic_visit(node)"
+                        }
+                    ]
+                }
+            ],
+            "standalone_functions": [
+                {
+                    "name": "parse_js_ts_file",
+                    "args": [
+                        "file_path",
+                        "content"
+                    ],
+                    "docstring": "Extracts symbols, exports, and imports from JavaScript/TypeScript files using optimized regex scanning.",
+                    "source_code": "def parse_js_ts_file(file_path: str, content: str) -> Dict[str, Any]:\n    \"\"\"Extracts symbols, exports, and imports from JavaScript/TypeScript files using optimized regex scanning.\"\"\"\n    meta = {'language': 'javascript/typescript', 'imports': [], 'classes': {}, 'standalone_functions': []}\n    es6_imports = re.findall('(?:import|from)\\\\s+[\\'\\\\\"]([^\\'\\\\\"]+)[\\'\\\\\"]', content)\n    commonjs_imports = re.findall('require\\\\s*\\\\(\\\\s*[\\'\\\\\"]([^\\'\\\\\"]+)[\\'\\\\\"]\\\\s*\\\\)', content)\n    for imp in set(es6_imports + commonjs_imports):\n        if not imp.startswith('.'):\n            meta['imports'].append(imp)\n    classes = re.findall('class\\\\s+(\\\\w+)(?:\\\\s+extends\\\\s+(\\\\w+))?', content)\n    for cls, base in classes:\n        meta['classes'][cls] = {'methods': [], 'base_classes': [base] if base else []}\n    found_functions = re.findall('function\\\\s+(\\\\w+)\\\\s*\\\\(', content)\n    found_arrow_funcs = re.findall('(?:const|let|var)\\\\s+(\\\\w+)\\\\s*=\\\\s*(?:\\\\([^)]*\\\\)|_\\\\w*)\\\\s*=>', content)\n    for func in set(found_functions + found_arrow_funcs):\n        meta['standalone_functions'].append(func)\n    return meta"
+                },
+                {
+                    "name": "generate_repository_graph",
+                    "args": [
+                        "root_dir"
+                    ],
+                    "docstring": "Crawl the workspace to compile a high-level Python & JS/TS dependency and structural graph map.",
+                    "source_code": "def generate_repository_graph(root_dir: str) -> Dict[str, Any]:\n    \"\"\"Crawl the workspace to compile a high-level Python & JS/TS dependency and structural graph map.\"\"\"\n    repo_graph = {'project_root': os.path.basename(os.path.abspath(root_dir)), 'manifest_dependencies': {}, 'directory_tree': {}, 'modules': {}}\n    package_json_path = os.path.join(root_dir, 'package.json')\n    if os.path.exists(package_json_path):\n        try:\n            with open(package_json_path, 'r', encoding='utf-8') as f:\n                pkg_data = json.load(f)\n                repo_graph['manifest_dependencies'] = {**pkg_data.get('dependencies', {}), **pkg_data.get('devDependencies', {})}\n        except Exception as e:\n            repo_graph['manifest_dependencies'] = {'error': f'Failed to parse package.json: {e}'}\n    supported_extensions = ('.py', '.js', '.ts', '.jsx', '.tsx')\n    for root, dirs, files in os.walk(root_dir):\n        if any((ignored in root for ignored in ['.git', '__pycache__', 'node_modules', 'venv', '.venv', 'chroma_db', 'storage', 'scorecards', 'dist', 'build', '.next'])):\n            continue\n        rel_path = os.path.relpath(root, root_dir)\n        dir_key = 'root' if rel_path == '.' else rel_path\n        tracked_files = [f for f in files if f.endswith(supported_extensions)]\n        if tracked_files:\n            repo_graph['directory_tree'][dir_key] = tracked_files\n        for file in files:\n            if file.endswith(supported_extensions):\n                full_path = os.path.join(root, file)\n                module_key = os.path.relpath(full_path, root_dir).replace(os.sep, '/')\n                try:\n                    with open(full_path, 'r', encoding='utf-8') as f:\n                        file_content = f.read()\n                    if file.endswith('.py'):\n                        tree = ast.parse(file_content, filename=file)\n                        analyzer = CodebaseGraphAnalyzer(module_key)\n                        analyzer.visit(tree)\n                        repo_graph['modules'][module_key] = analyzer.meta\n                    else:\n                        repo_graph['modules'][module_key] = parse_js_ts_file(module_key, file_content)\n                except Exception as e:\n                    repo_graph['modules'][module_key] = {'error': f'Failed to parse source tree elements: {e}'}\n    output_path = os.path.join(root_dir, 'repo_blueprint.json')\n    with open(output_path, 'w', encoding='utf-8') as out:\n        json.dump(repo_graph, out, indent=4)\n    print(f\"\ud83c\udfaf [Repository Graph]: Blueprint map successfully compiled to '{output_path}'.\")\n    return repo_graph"
+                }
+            ],
+            "module": "analyzer/repo_graph.py"
+        },
+        "vector_store.py": {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\analyzer\\vector_store.py",
+            "classes": [],
+            "standalone_functions": [
+                {
+                    "name": "get_vector_collection",
+                    "args": [],
+                    "docstring": "Initializes a persistent database storage folder on disk \nand sets up an indexing collection.",
+                    "source_code": "def get_vector_collection():\n    \"\"\"\n    Initializes a persistent database storage folder on disk \n    and sets up an indexing collection.\n    \"\"\"\n    storage_dir = os.path.join(os.getcwd(), 'chroma_db_data')\n    client = chromadb.PersistentClient(path=storage_dir)\n    collection = client.get_or_create_collection(name='repository_methods')\n    return collection"
+                },
+                {
+                    "name": "store_codebase_vectors",
+                    "args": [
+                        "parsed_files_list"
+                    ],
+                    "docstring": "Takes the code mapping array from our crawler, isolates the code blocks,\nand inserts them directly into our vector storage engine.",
+                    "source_code": "def store_codebase_vectors(parsed_files_list: list):\n    \"\"\"\n    Takes the code mapping array from our crawler, isolates the code blocks,\n    and inserts them directly into our vector storage engine.\n    \"\"\"\n    collection = get_vector_collection()\n    documents = []\n    metadatas = []\n    ids = []\n    counter = 1\n    for file_info in parsed_files_list:\n        file_path = file_info['file_path']\n        for cls in file_info['classes']:\n            class_name = cls['name']\n            for method in cls['methods']:\n                documents.append(method['source_code'])\n                metadatas.append({'file_path': file_path, 'scope': 'class_method', 'parent_symbol': class_name, 'symbol_name': method['name'], 'docstring': method['docstring'] or ''})\n                ids.append(f'id_symbol_{counter}')\n                counter += 1\n        for func in file_info['standalone_functions']:\n            documents.append(func['source_code'])\n            metadatas.append({'file_path': file_path, 'scope': 'standalone_function', 'parent_symbol': 'None', 'symbol_name': func['name'], 'docstring': func['docstring'] or ''})\n            ids.append(f'id_symbol_{counter}')\n            counter += 1\n    if documents:\n        collection.upsert(documents=documents, metadatas=metadatas, ids=ids)\n        print(f'\\n Successfully embedded and stored {len(documents)} functional code vectors.')\n    else:\n        print('\\nNo functional code blocks found to embed.')"
+                }
+            ],
+            "module": "analyzer/vector_store.py"
+        },
+        "memory_ledger.py": {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\storage\\memory_ledger.py",
+            "classes": [],
+            "standalone_functions": [
+                {
+                    "name": "get_db_connection",
+                    "args": [],
+                    "docstring": "Establishes a thread-safe connection to the local SQLite ledger.",
+                    "source_code": "def get_db_connection():\n    \"\"\"Establishes a thread-safe connection to the local SQLite ledger.\"\"\"\n    conn = sqlite3.connect(DB_PATH)\n    conn.row_factory = sqlite3.Row\n    return conn"
+                },
+                {
+                    "name": "initialize_ledger",
+                    "args": [],
+                    "docstring": "Initialises the database schemas if they do not already exist on disk.",
+                    "source_code": "def initialize_ledger():\n    \"\"\"Initialises the database schemas if they do not already exist on disk.\"\"\"\n    conn = get_db_connection()\n    cursor = conn.cursor()\n    cursor.execute('\\n        CREATE TABLE IF NOT EXISTS sessions (\\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\\n            timestamp TEXT NOT NULL,\\n            session_mode TEXT NOT NULL,\\n            difficulty TEXT NOT NULL,\\n            interviewer_persona TEXT NOT NULL\\n        )\\n    ')\n    cursor.execute('\\n        CREATE TABLE IF NOT EXISTS category_scores (\\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\\n            session_id INTEGER NOT NULL,\\n            category_name TEXT NOT NULL,\\n            score_percentage REAL NOT NULL,\\n            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE\\n        )\\n    ')\n    cursor.execute('\\n        CREATE TABLE IF NOT EXISTS weakness_tracker (\\n            topic_tag TEXT PRIMARY KEY,\\n            occurrence_count INTEGER DEFAULT 1,\\n            last_flagged TEXT NOT NULL\\n        )\\n    ')\n    conn.commit()\n    conn.close()\n    print('\ud83d\udcbe [Memory Ledger]: Adaptive persistence engine initialised successfully.')"
+                },
+                {
+                    "name": "log_completed_session",
+                    "args": [
+                        "metadata",
+                        "scores",
+                        "weaknesses"
+                    ],
+                    "docstring": "Saves the entire performance blueprint to the database at the end of a run.\nIncrements the historical frequency of missing engineering markers.",
+                    "source_code": "def log_completed_session(metadata: Dict[str, Any], scores: Dict[str, float], weaknesses: List[str]):\n    \"\"\"\n    Saves the entire performance blueprint to the database at the end of a run.\n    Increments the historical frequency of missing engineering markers.\n    \"\"\"\n    conn = get_db_connection()\n    cursor = conn.cursor()\n    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')\n    try:\n        cursor.execute('\\n            INSERT INTO sessions (timestamp, session_mode, difficulty, interviewer_persona)\\n            VALUES (?, ?, ?, ?)\\n        ', (now_str, metadata['session_mode'], metadata['difficulty'], metadata['interviewer_persona']))\n        session_id = cursor.lastrowid\n        for category, score in scores.items():\n            cursor.execute('\\n                INSERT INTO category_scores (session_id, category_name, score_percentage)\\n                VALUES (?, ?, ?)\\n            ', (session_id, category, score))\n        for topic in weaknesses:\n            cursor.execute('\\n                INSERT INTO weakness_tracker (topic_tag, occurrence_count, last_flagged)\\n                VALUES (?, 1, ?)\\n                ON CONFLICT(topic_tag) DO UPDATE SET \\n                    occurrence_count = occurrence_count + 1,\\n                    last_flagged = ?\\n            ', (topic.strip().lower(), now_str, now_str))\n        conn.commit()\n        print(f'\ud83d\udcbe [Memory Ledger]: Successfully synced performance metrics to Session Profile #{session_id}.')\n    except Exception as e:\n        conn.rollback()\n        print(f'\u26a0\ufe0f [Memory Ledger Error]: Failed to write session data: {e}')\n    finally:\n        conn.close()"
+                },
+                {
+                    "name": "get_historical_weaknesses",
+                    "args": [
+                        "limit"
+                    ],
+                    "docstring": "Queries the database for your highest-frequency conceptual gaps.\nUsed by the Interview Agent to dynamically adjust question focus.",
+                    "source_code": "def get_historical_weaknesses(limit: int=5) -> List[Dict[str, Any]]:\n    \"\"\"\n    Queries the database for your highest-frequency conceptual gaps.\n    Used by the Interview Agent to dynamically adjust question focus.\n    \"\"\"\n    conn = get_db_connection()\n    cursor = conn.cursor()\n    cursor.execute('\\n        SELECT topic_tag, occurrence_count \\n        FROM weakness_tracker \\n        WHERE occurrence_count > 0 \\n        ORDER BY occurrence_count DESC \\n        LIMIT ?\\n    ', (limit,))\n    rows = cursor.fetchall()\n    conn.close()\n    return [{'topic': row['topic_tag'], 'weight': row['occurrence_count']} for row in rows]"
+                }
+            ],
+            "module": "storage/memory_ledger.py"
+        },
+        "report_exporter.py": {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\storage\\report_exporter.py",
+            "classes": [],
+            "standalone_functions": [
+                {
+                    "name": "export_session_report",
+                    "args": [
+                        "metadata",
+                        "scores",
+                        "weaknesses",
+                        "grades"
+                    ],
+                    "docstring": "Compiles session evaluation metrics into a beautifully structured Markdown report file.",
+                    "source_code": "def export_session_report(metadata: Dict[str, Any], scores: Dict[str, float], weaknesses: List[str], grades: List[Dict[str, Any]]) -> str:\n    \"\"\"\n    Compiles session evaluation metrics into a beautifully structured Markdown report file.\n    \"\"\"\n    os.makedirs(OUTPUT_DIR, exist_ok=True)\n    now = datetime.now()\n    timestamp_str = now.strftime('%Y-%m-%d %H:%M:%S')\n    file_safe_date = now.strftime('%Y%m%d_%H%M%S')\n    filename = f\"scorecard_{metadata['interviewer_persona']}_{file_safe_date}.md\"\n    full_path = os.path.join(OUTPUT_DIR, filename)\n\n    def get_status_emoji(percentage: float) -> str:\n        if percentage >= 85:\n            return '\u2705 Proficient'\n        if percentage >= 60:\n            return '\u26a0\ufe0f Developing'\n        return '\u274c Critical Focus'\n    md_content = f\"# \ud83d\udcca Technical Evaluation Performance Report\\n**Generated:** `{timestamp_str}`  \\n**Track Mode:** `{metadata['session_mode'].upper()}`  \\n**Target Difficulty:** `{metadata['difficulty'].upper()}`  \\n**Assigned Interviewer Archetype:** `{metadata['interviewer_persona'].upper()}`\\n\\n---\\n\\n## \ud83d\udcc8 Core Engineering Pillars Breakdown\\n\\n| Technical Competency Pillar | Score Percentage | Status Assessment |\\n| :--- | :---: | :--- |\\n| \ud83c\udfd7\ufe0f Architecture & Structural Design | {scores['Architecture']:.1f}% | {get_status_emoji(scores['Architecture'])} |\\n| \u2699\ufe0f Backend Logic & Syntax Execution | {scores['Backend Logic']:.1f}% | {get_status_emoji(scores['Backend Logic'])} |\\n| \ud83d\udd12 Security, Vulnerabilities & Bounds | {scores['Security']:.1f}% | {get_status_emoji(scores['Security'])} |\\n| \ud83d\uddc4\ufe0f Databases, Indexing & Data Flow | {scores['Databases']:.1f}% | {get_status_emoji(scores['Databases'])} |\\n| \ud83d\ude80 Scalability, Benchmarks & Big-O | {scores['Scalability']:.1f}% | {get_status_emoji(scores['Scalability'])} |\\n\\n---\\n\\n## \ud83d\udd0d Conceptual Weakness Tracker\\nThe evaluator flagged the following specific domain gaps during this session. These tags have been synced to your persistent memory ledger to optimize future interview focus variants:\\n\\n\"\n    if weaknesses:\n        for topic in set(weaknesses):\n            md_content += f'- \u26a0\ufe0f `{topic.strip().lower()}`\\n'\n    else:\n        md_content += '- \ud83c\udf89 No systemic critical weaknesses flagged this round. Exceptional performance.\\n'\n    md_content += '\\n---\\n\\n## \ud83d\udccc Question-by-Question Evaluation History\\n'\n    for grade in grades:\n        md_content += f\"### \u2753 Question #{grade['question_num']}\\n\"\n        formatted_eval = grade['raw_evaluation'].replace('\\n', '\\n> ')\n        md_content += f'> {formatted_eval}\\n\\n'\n        md_content += '--- \\n\\n'\n    md_content += '\ud83e\udd16 *Keep refining your codebase architecture and pushing boundaries. Session End.*'\n    with open(full_path, 'w', encoding='utf-8') as f:\n        f.write(md_content.strip())\n    print(f\"\ud83d\udccb [Report Exporter]: Performance scorecard successfully saved to '{full_path}'.\")\n    return full_path"
+                }
+            ],
+            "module": "storage/report_exporter.py"
+        },
+        "flatted.py": {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\studio\\node_modules\\flatted\\python\\flatted.py",
+            "classes": [
+                {
+                    "name": "_Known",
+                    "docstring": null,
+                    "methods": [
+                        {
+                            "name": "__init__",
+                            "args": [
+                                "self"
+                            ],
+                            "docstring": null,
+                            "source_code": "def __init__(self):\n    self.key = []\n    self.value = []"
+                        }
+                    ]
+                },
+                {
+                    "name": "_String",
+                    "docstring": null,
+                    "methods": [
+                        {
+                            "name": "__init__",
+                            "args": [
+                                "self",
+                                "value"
+                            ],
+                            "docstring": null,
+                            "source_code": "def __init__(self, value):\n    self.value = value"
+                        }
+                    ]
+                }
+            ],
+            "standalone_functions": [
+                {
+                    "name": "_array_keys",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _array_keys(value):\n    for i in range(len(value)):\n        yield i"
+                },
+                {
+                    "name": "_object_keys",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _object_keys(value):\n    for key in value:\n        yield key"
+                },
+                {
+                    "name": "_is_array",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _is_array(value):\n    return isinstance(value, (list, tuple))"
+                },
+                {
+                    "name": "_is_object",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _is_object(value):\n    return isinstance(value, dict)"
+                },
+                {
+                    "name": "_is_string",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _is_string(value):\n    return isinstance(value, str)"
+                },
+                {
+                    "name": "_index",
+                    "args": [
+                        "known",
+                        "input",
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _index(known, input, value):\n    input.append(value)\n    index = str(len(input) - 1)\n    known.key.append(value)\n    known.value.append(index)\n    return index"
+                },
+                {
+                    "name": "_relate",
+                    "args": [
+                        "known",
+                        "input",
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _relate(known, input, value):\n    if _is_string(value) or _is_array(value) or _is_object(value):\n        try:\n            return known.value[known.key.index(value)]\n        except:\n            return _index(known, input, value)\n    return value"
+                },
+                {
+                    "name": "_resolver",
+                    "args": [
+                        "input",
+                        "lazy",
+                        "parsed"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _resolver(input, lazy, parsed):\n\n    def resolver(output):\n        keys = _array_keys(output) if _is_array(output) else _object_keys(output) if _is_object(output) else []\n        for key in keys:\n            value = output[key]\n            if isinstance(value, _String):\n                tmp = input[int(value.value)]\n                output[key] = tmp\n                if (_is_array(tmp) or _is_object(tmp)) and tmp not in parsed:\n                    parsed.append(tmp)\n                    lazy.append([output, key])\n        return output\n    return resolver"
+                },
+                {
+                    "name": "_transform",
+                    "args": [
+                        "known",
+                        "input",
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _transform(known, input, value):\n    if _is_array(value):\n        output = []\n        for val in value:\n            output.append(_relate(known, input, val))\n        return output\n    if _is_object(value):\n        obj = {}\n        for key in value:\n            obj[key] = _relate(known, input, value[key])\n        return obj\n    return value"
+                },
+                {
+                    "name": "_wrap",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _wrap(value):\n    if _is_string(value):\n        return _String(value)\n    if _is_array(value):\n        i = 0\n        for val in value:\n            value[i] = _wrap(val)\n            i += 1\n    elif _is_object(value):\n        for key in value:\n            value[key] = _wrap(value[key])\n    return value"
+                },
+                {
+                    "name": "parse",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def parse(value, *args, **kwargs):\n    json = _json.loads(value, *args, **kwargs)\n    wrapped = []\n    for value in json:\n        wrapped.append(_wrap(value))\n    input = []\n    for value in wrapped:\n        if isinstance(value, _String):\n            input.append(value.value)\n        else:\n            input.append(value)\n    value = input[0]\n    lazy = []\n    revive = _resolver(input, lazy, [value])\n    value = revive(value)\n    i = 0\n    while i < len(lazy):\n        o, k = lazy[i]\n        i += 1\n        o[k] = revive(o[k])\n    return value"
+                },
+                {
+                    "name": "stringify",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def stringify(value, *args, **kwargs):\n    known = _Known()\n    input = []\n    output = []\n    i = int(_index(known, input, value))\n    while i < len(input):\n        output.append(_transform(known, input, input[i]))\n        i += 1\n    return _json.dumps(output, *args, **kwargs)"
+                }
+            ],
+            "module": "studio/node_modules/flatted/python/flatted.py"
+        }
+    },
+    "raw_ast_pool": [
+        {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\app.py",
+            "classes": [
+                {
+                    "name": "ChatMessage",
+                    "docstring": null,
+                    "methods": []
+                },
+                {
+                    "name": "RepoSelectPayload",
+                    "docstring": null,
+                    "methods": []
+                }
+            ],
+            "standalone_functions": [
+                {
+                    "name": "get_telemetry_data",
+                    "args": [],
+                    "docstring": "Aggregates local database logs and code architecture blueprints.",
+                    "source_code": "@app.get('/api/telemetry')\ndef get_telemetry_data():\n    \"\"\"Aggregates local database logs and code architecture blueprints.\"\"\"\n    response_data = {'blueprint': {}, 'metrics': {'Architecture': 0.0, 'Backend Logic': 0.0, 'Security': 0.0, 'Databases': 0.0, 'Scalability': 0.0}, 'weaknesses': []}\n    if os.path.exists(BLUEPRINT_PATH):\n        try:\n            with open(BLUEPRINT_PATH, 'r', encoding='utf-8') as f:\n                response_data['blueprint'] = json.load(f)\n        except Exception:\n            pass\n    if os.path.exists(DB_PATH):\n        try:\n            conn = sqlite3.connect(DB_PATH)\n            cursor = conn.cursor()\n            cursor.execute('\\n                SELECT \\n                    AVG(architecture_score), AVG(backend_logic_score), \\n                    AVG(security_score), AVG(database_score), AVG(scalability_score) \\n                FROM session_metrics\\n            ')\n            row = cursor.fetchone()\n            if row and row[0] is not None:\n                response_data['metrics'] = {'Architecture': round(row[0], 1), 'Backend Logic': round(row[1], 1), 'Security': round(row[2], 1), 'Databases': round(row[3], 1), 'Scalability': round(row[4], 1)}\n            cursor.execute('SELECT DISTINCT topic_tag FROM concept_weaknesses')\n            response_data['weaknesses'] = [tag[0] for tag in cursor.fetchall()]\n            conn.close()\n        except Exception:\n            pass\n    return response_data"
+                },
+                {
+                    "name": "select_and_scan_repository",
+                    "args": [
+                        "payload"
+                    ],
+                    "docstring": null,
+                    "source_code": "@app.post('/api/repo/select')\ndef select_and_scan_repository(payload: RepoSelectPayload):\n    target_path = payload.repo_path.strip()\n    if not os.path.exists(target_path):\n        raise HTTPException(status_code=400, detail=f\"Target path layout not found on this system: '{target_path}'\")\n    try:\n        print(f'\ud83d\udcc1 Initializing deep AST crawl on target workspace: {target_path}')\n        parsed_list = crawl_repository(target_path)\n        blueprint_data = {'repo_path': target_path, 'files': {os.path.basename(item.get('file_path', 'module')): item for item in parsed_list if isinstance(item, dict)} if parsed_list and isinstance(parsed_list[0], dict) else {}, 'raw_ast_pool': parsed_list}\n        session_blueprint_dir = os.path.join('storage', 'blueprints')\n        os.makedirs(session_blueprint_dir, exist_ok=True)\n        target_blueprint_file = os.path.join(session_blueprint_dir, f'{payload.session_id}.json')\n        with open(target_blueprint_file, 'w', encoding='utf-8') as f:\n            json.dump(blueprint_data, f, indent=4)\n        print(f'\ud83d\udcbe Ingestion complete. Balanced blueprint schema written!')\n        return {'status': 'success', 'message': f'Successfully indexed workspace data at {target_path}', 'file_count': len(parsed_list) if isinstance(parsed_list, list) else 0}\n    except Exception as e:\n        raise HTTPException(status_code=500, detail=f'AST Ingestion Pipeline failed: {str(e)}')"
+                },
+                {
+                    "name": "submit_chat_turn",
+                    "args": [
+                        "payload"
+                    ],
+                    "docstring": null,
+                    "source_code": "@app.post('/api/chat/submit')\ndef submit_chat_turn(payload: ChatMessage):\n    user_input = payload.message.strip()\n    if not user_input:\n        raise HTTPException(status_code=400, detail='Input cannot be empty.')\n    try:\n        thread_id = payload.session_id if payload.session_id else 'default_session'\n        session_blueprint_file = os.path.join('storage', 'blueprints', f'{thread_id}.json')\n        repo_blueprint_data = {}\n        if os.path.exists(session_blueprint_file):\n            with open(session_blueprint_file, 'r', encoding='utf-8') as f:\n                repo_blueprint_data = json.load(f)\n        elif os.path.exists(BLUEPRINT_PATH):\n            with open(BLUEPRINT_PATH, 'r', encoding='utf-8') as f:\n                repo_blueprint_data = json.load(f)\n        config = {'configurable': {'thread_id': thread_id}}\n        current_state = orchestrator_app.get_state(config)\n        if not current_state.values:\n            active_question_index = 1\n        else:\n            last_index = current_state.values.get('current_question_index', 1)\n            active_question_index = last_index + 1\n        print(f'\ud83d\udce1 Checkpointer Thread: {thread_id} | Resolved Internal State Question Index: {active_question_index}')\n        inputs = {'query': user_input, 'messages': [{'role': 'user', 'content': user_input}], 'retrieved_code_vectors': [], 'repo_blueprint': repo_blueprint_data, 'session_mode': 'interview', 'difficulty': 'medium', 'interviewer_persona': 'architect', 'current_question_index': active_question_index}\n        final_output = orchestrator_app.invoke(inputs, config=config)\n        if active_question_index >= 6:\n            agent_reply = '### \ud83c\udf93 Interview Session Complete!\\n\\nThank you for completing the Reposeer Core architectural evaluation. Your responses have been compiled, graded, and synced to your local telemetry ledger. You can now view your updated competency metrics matrix in the sidebar panel.'\n        else:\n            agent_reply = final_output.get('current_draft') or 'Next question initializing...'\n        return {'status': 'success', 'reply': agent_reply}\n    except Exception as e:\n        raise HTTPException(status_code=500, detail=f'Graph Engine Error: {str(e)}')"
+                }
+            ],
+            "module": "app.py"
+        },
+        {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\chat_interface.py",
+            "classes": [],
+            "standalone_functions": [
+                {
+                    "name": "display_welcome_banner",
+                    "args": [],
+                    "docstring": null,
+                    "source_code": "def display_welcome_banner():\n    print('\\n' + '=' * 75)\n    print('\ud83c\udf99\ufe0f  REPOSEER-CORE: THE INTELLIGENT TECHNICAL INTERVIEW SIMULATOR')\n    print('    Prepare for code reviews, technical rounds, and engineering panels.')\n    print('=' * 75)"
+                },
+                {
+                    "name": "setup_session",
+                    "args": [],
+                    "docstring": "Prompts the user to select their track, difficulty level, \nand randomly configures an interviewer personality if needed.",
+                    "source_code": "def setup_session():\n    \"\"\"\n    Prompts the user to select their track, difficulty level, \n    and randomly configures an interviewer personality if needed.\n    \"\"\"\n    display_welcome_banner()\n    print('\\nSelect Your Training Track:')\n    print('  [1] Casual Mode (Study & Explore codebase freely)')\n    print('  [2] Interviewer Mode (5-Question Mock Exam simulation)')\n    while True:\n        choice = input('\\n\ud83d\udc49 Choose track (1 or 2): ').strip()\n        if choice in ['1', '2']:\n            mode = 'casual' if choice == '1' else 'interview'\n            break\n        print('\u274c Invalid selection. Please enter 1 or 2.')\n    print('\\nSelect Technical Target Difficulty:')\n    print('  [Easy]   - Core Syntax, logic flow, and basic modular components')\n    print('  [Medium] - Edge-case validation, state pipelines, and system logic')\n    print('  [Hard]   - Concurrency limits, scale bottlenecks, and deep optimizations')\n    while True:\n        diff_input = input('\\n\ud83d\udc49 Enter difficulty (easy, medium, hard): ').strip().lower()\n        if diff_input in ['easy', 'medium', 'hard']:\n            difficulty = diff_input\n            break\n        print(\"\u274c Invalid choice. Please type 'easy', 'medium', or 'hard'.\")\n    persona = 'none'\n    if mode == 'interview':\n        personas = ['collaborator', 'traditionalist', 'architect']\n        persona = random.choice(personas)\n        persona_titles = {'collaborator': '\ud83e\udd1d The Helpful Collaborator (Senior Pair-Programmer)', 'traditionalist': '\u23f1\ufe0f  The Strict Traditionalist (Algorithm Purist)', 'architect': '\ud83c\udfaf The Pragmatic Architect (Startup Tech Lead)'}\n        print('\\n' + '-' * 75)\n        print(f'\ud83d\udd12 ASSIGNED INTERVIEWER: {persona_titles[persona]}')\n        print('   They have reviewed your database indexes and are preparing questions...')\n        print('-' * 75)\n    else:\n        print('\\n' + '-' * 75)\n        print('\ud83e\udde0 CASUAL MENTOR ACTIVATED: Ask anything about your codebase files.')\n        print('-' * 75)\n    return (mode, difficulty, persona)"
+                },
+                {
+                    "name": "launch_chat_engine",
+                    "args": [],
+                    "docstring": null,
+                    "source_code": "def launch_chat_engine():\n    mode, difficulty, persona = setup_session()\n    conversation_history = []\n    running_scores = []\n    q_index = 1 if mode == 'interview' else 0\n    while True:\n        try:\n            if mode == 'interview' and q_index == 1 and (len(conversation_history) == 0):\n                print('\\n\u2699\ufe0f  Initializing mock board. Generating question 1 of 5...')\n                user_query = 'INITIALIZE_INTERVIEW_SESSION'\n            else:\n                user_query = input('\\n\ud83d\udcac You: ').strip()\n                if not user_query:\n                    continue\n                if user_query.lower() in ['exit', 'quit']:\n                    print('\\n\ud83d\udd0c Closing the simulator. Keep pushing commits. Goodbye!')\n                    break\n            print('\\n\u2699\ufe0f  Processing response through agent nodes...')\n            blueprint_data = {}\n            if os.path.exists('repo_blueprint.json'):\n                try:\n                    with open('repo_blueprint.json', 'r', encoding='utf-8') as f:\n                        blueprint_data = json.load(f)\n                except Exception as e:\n                    print(f'  \u21b3 \u26a0\ufe0f  [State Sync Warning]: Could not parse repo_blueprint.json: {e}')\n            input_state = {'query': user_query, 'messages': conversation_history, 'retrieved_code_vectors': [], 'repo_blueprint': blueprint_data, 'current_draft': '', 'review_feedback': '', 'steps_taken': [], 'session_mode': mode, 'difficulty': difficulty, 'interviewer_persona': persona, 'current_question_index': q_index, 'evaluation_scores': running_scores}\n            if user_query != 'INITIALIZE_INTERVIEW_SESSION':\n                conversation_history.append({'role': 'user', 'content': user_query})\n            final_state = orchestrator_app.invoke(input_state)\n            agent_response = final_state.get('current_draft', '\u26a0\ufe0f Error: Generation failed.')\n            conversation_history.append({'role': 'assistant', 'content': agent_response})\n            if 'evaluation_scores' in final_state:\n                running_scores = final_state['evaluation_scores']\n            print(f'\\n\ud83e\udd16 Response:')\n            print('-' * 60)\n            print(agent_response)\n            print('-' * 60)\n            if mode == 'interview':\n                if q_index >= 5:\n                    print('\\n\ud83c\udfc1 Technical evaluation round complete! Compiling your final scorecard...')\n                    print('\\n' + '=' * 75)\n                    print('\ud83d\udcca OFFICIAL REPOSEER-CORE TECHNICAL EVALUATION PERFORMANCE REPORT')\n                    print('=' * 75)\n                    avg_metrics = {'Architecture': 0.0, 'Backend Logic': 0.0, 'Security': 0.0, 'Databases': 0.0, 'Scalability': 0.0}\n                    all_weaknesses = []\n                    if running_scores:\n                        for grade in running_scores:\n                            print(f\"\\n\ud83d\udccc QUESTION #{grade['question_num']} EVALUATION:\")\n                            print(grade['raw_evaluation'])\n                            print('-' * 50)\n                            payload = grade.get('json_payload')\n                            if payload:\n                                avg_metrics['Architecture'] += payload['architecture_percentage'] / 5\n                                avg_metrics['Backend Logic'] += payload['backend_logic_percentage'] / 5\n                                avg_metrics['Security'] += payload['security_percentage'] / 5\n                                avg_metrics['Databases'] += payload['databases_percentage'] / 5\n                                avg_metrics['Scalability'] += payload['scalability_percentage'] / 5\n                                all_weaknesses.extend(payload.get('flagged_weaknesses', []))\n                        meta_payload = {'session_mode': mode, 'difficulty': difficulty, 'interviewer_persona': persona}\n                        unique_weaknesses = list(set(all_weaknesses))\n                        from storage.memory_ledger import log_completed_session\n                        log_completed_session(meta_payload, avg_metrics, unique_weaknesses)\n                        from storage.report_exporter import export_session_report\n                        export_session_report(meta_payload, avg_metrics, unique_weaknesses, running_scores)\n                    else:\n                        print('\\n\u26a0\ufe0f Note: No answer entries were recorded for scoring evaluation.')\n                    print('\\n' + '=' * 75)\n                    print('\ud83d\ude80 Keep refining your codebase architecture and pushing boundaries. Session End.')\n                    print('=' * 75)\n                    break\n                q_index += 1\n        except KeyboardInterrupt:\n            print('\\n\\n\ud83d\udd0c Session terminated via keyboard. Exiting...')\n            sys.exit(0)"
+                }
+            ],
+            "module": "chat_interface.py"
+        },
+        {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\agents\\orchestrator.py",
+            "classes": [
+                {
+                    "name": "AgentState",
+                    "docstring": null,
+                    "methods": []
+                }
+            ],
+            "standalone_functions": [
+                {
+                    "name": "router_node",
+                    "args": [
+                        "state"
+                    ],
+                    "docstring": null,
+                    "source_code": "def router_node(state: AgentState) -> Dict[str, Any]:\n    print('\ud83e\udd16 Agent Node [Router]: Analyzing context and querying vector store...')\n    if state['query'] == 'INITIALIZE_INTERVIEW_SESSION':\n        return {'retrieved_code_vectors': [], 'steps_taken': state.get('steps_taken', []) + ['live_routed']}\n    search_query = state['query']\n    if state.get('messages') and len(state['messages']) > 1:\n        print('   \u21b3 \ud83e\udde0 Context detected. Condensing shorthand query via Gemini...')\n        chat_history_context = ''\n        for msg in state['messages'][:-1]:\n            chat_history_context += f\"{msg['role']}: {msg['content']}\\n\"\n        condensation_prompt = f\"Given the following conversation history and a new shorthand follow-up question, rewrite the new question into a standalone, descriptive search query focused on resolving the intended codebase target files or symbols.\\n\\nConversation History:\\n{chat_history_context}\\nNew Follow-up Question: {state['query']}\\n\\nOutput ONLY the optimized search string. Do not include introductory text.\"\n        try:\n            condensation_response = ai_client.models.generate_content(model='gemini-2.5-flash', contents=condensation_prompt)\n            optimized_query = condensation_response.text.strip()\n            if optimized_query:\n                search_query = optimized_query\n                print(f\"   \u21b3 Optimized Search Vector: '{search_query}'\")\n        except Exception as e:\n            print(f'   \u21b3 \u26a0\ufe0f Query condensation skipped due to error: {e}')\n    chroma_client = chromadb.PersistentClient(path='./chroma_db_data')\n    collection = chroma_client.get_collection(name='repository_methods')\n    results = collection.query(query_texts=[search_query], n_results=2)\n    retrieved_docs = []\n    if results and results['documents'] and results['documents'][0]:\n        for doc, metadata in zip(results['documents'][0], results['metadatas'][0]):\n            retrieved_docs.append({'file': metadata.get('file_path', 'unknown'), 'scope': metadata.get('scope', 'unknown'), 'symbol_name': metadata.get('symbol_name', 'unknown'), 'content': doc})\n            print(f\"   \u21b3 Extracted relevant {metadata.get('scope')}: '{metadata.get('symbol_name')}' from {metadata.get('file_path')}\")\n    if not retrieved_docs:\n        print('   \u21b3 \u26a0\ufe0f Warning: No relevant code vectors found for this query.')\n    return {'retrieved_code_vectors': retrieved_docs, 'steps_taken': state.get('steps_taken', []) + ['live_routed']}"
+                },
+                {
+                    "name": "doc_agent_node",
+                    "args": [
+                        "state"
+                    ],
+                    "docstring": null,
+                    "source_code": "def doc_agent_node(state: AgentState) -> Dict[str, Any]:\n    print('\ud83d\udcdd Agent Node [Doc Writer]: Generating production response via Gemini...')\n    code_context = ''\n    for vec in state['retrieved_code_vectors']:\n        code_context += f\"\\n--- FILE: {vec['file']} ({vec['scope']}: {vec['symbol_name']}) ---\\n{vec['content']}\\n\"\n    chat_history_context = ''\n    for msg in state.get('messages', []):\n        chat_history_context += f\"\ud83d\udc64 {msg['role'].capitalize()}: {msg['content']}\\n\"\n    system_instruction = 'You are an expert technical AI assistant linked directly to a local codebase. Your job is to provide clean, technical, and accurate code summaries or answers using the retrieved code context assets and conversation history. Always format code references within proper markdown ticks.'\n    user_prompt = ''\n    if chat_history_context:\n        user_prompt += f'Prior Conversation History:\\n{chat_history_context}\\n'\n    user_prompt += f'Code Context Assets for Current Turn:\\n{code_context}\\n\\n'\n    user_prompt += f\"Latest User Query: {state['query']}\"\n    if state.get('review_feedback'):\n        user_prompt += f\"\\n\\nCRITICAL - Previous Review Feedback to Correct:\\n{state['review_feedback']}\"\n    response = ai_client.models.generate_content(model='gemini-2.5-flash', contents=user_prompt, config={'system_instruction': system_instruction})\n    step_tag = 'documented_fixed' if state.get('review_feedback') else 'documented_initial'\n    return {'current_draft': response.text, 'review_feedback': '', 'steps_taken': state.get('steps_taken', []) + [step_tag]}"
+                },
+                {
+                    "name": "reviewer_node",
+                    "args": [
+                        "state"
+                    ],
+                    "docstring": null,
+                    "source_code": "def reviewer_node(state: AgentState) -> Dict[str, Any]:\n    steps = state.get('steps_taken', [])\n    if state.get('session_mode') == 'interview':\n        if state['query'] == 'INITIALIZE_INTERVIEW_SESSION':\n            return {'steps_taken': steps + ['interview_init_passed']}\n        print(f\"\ud83d\udd2c Agent Node [Evaluator]: Structured grading for Question {state['current_question_index'] - 1}...\")\n        eval_schema = types.Schema(type=types.Type.OBJECT, properties={'score': types.Schema(type=types.Type.INTEGER, description='Grade from 0 to 10'), 'critique': types.Schema(type=types.Type.STRING, description='Actionable 1-2 sentence technical review.'), 'architecture_percentage': types.Schema(type=types.Type.INTEGER, description='0-100 evaluation of architectural awareness.'), 'backend_logic_percentage': types.Schema(type=types.Type.INTEGER, description='0-100 evaluation of code and logic mechanics.'), 'security_percentage': types.Schema(type=types.Type.INTEGER, description='0-100 evaluation of vulnerabilities and bounds.'), 'databases_percentage': types.Schema(type=types.Type.INTEGER, description='0-100 evaluation of indexing, schemas, or data flow.'), 'scalability_percentage': types.Schema(type=types.Type.INTEGER, description='0-100 evaluation of scale, Big-O, or performance trade-offs.'), 'flagged_weaknesses': types.Schema(type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING), description=\"Lowercase concept tags candidate missed (e.g., 'indexes', 'redis caching', 'rate limiting'). Max 2.\")}, required=['score', 'critique', 'architecture_percentage', 'backend_logic_percentage', 'security_percentage', 'databases_percentage', 'scalability_percentage', 'flagged_weaknesses'])\n        last_question = 'Unknown context'\n        for msg in reversed(state.get('messages', [])):\n            if msg['role'] == 'assistant':\n                last_question = msg['content']\n                break\n        user_prompt = f\"Question Asked: {last_question}\\nCandidate's Answer: {state['query']}\"\n        fallback_eval_data = {'score': 5, 'critique': 'Evaluation model temporarily rate-limited. Progress preserved.', 'architecture_percentage': 50, 'backend_logic_percentage': 50, 'security_percentage': 50, 'databases_percentage': 50, 'scalability_percentage': 50, 'flagged_weaknesses': []}\n        eval_data = None\n        max_retries = 3\n        for attempt in range(max_retries):\n            try:\n                eval_response = ai_client.models.generate_content(model='gemini-2.5-flash', contents=user_prompt, config=types.GenerateContentConfig(system_instruction=\"You are an elite corporate technical evaluation board. Evaluate the candidate's answer against professional standards. Grade out of 10 and map performance directly to the individual technical category percentages.\", response_mime_type='application/json', response_schema=eval_schema))\n                eval_data = json.loads(eval_response.text)\n                break\n            except (APIError, Exception) as e:\n                print(f'  \u26a0\ufe0f Attempt {attempt + 1} failed: {e}')\n                if attempt < max_retries - 1:\n                    time.sleep(2)\n                else:\n                    print('  \u274c Max retries reached. Injecting safe default telemetry baseline.')\n                    eval_data = fallback_eval_data\n        if eval_data is None:\n            eval_data = fallback_eval_data\n        raw_evaluation_output = f\"SCORE: {eval_data['score']}/10\\nCRITIQUE: {eval_data['critique']}\\n\ud83d\udcca CATEGORY BREAKDOWN:\\n  \u2022 Architecture:  {eval_data['architecture_percentage']}%\\n  \u2022 Backend Logic: {eval_data['backend_logic_percentage']}%\\n  \u2022 Security:      {eval_data['security_percentage']}%\\n  \u2022 Databases:     {eval_data['databases_percentage']}%\\n  \u2022 Scalability:   {eval_data['scalability_percentage']}%\"\n        new_scores = state.get('evaluation_scores', []) + [{'question_num': state['current_question_index'] - 1, 'raw_evaluation': raw_evaluation_output, 'score': f\"{eval_data['score']}/10\", 'json_payload': eval_data}]\n        return {'evaluation_scores': new_scores, 'steps_taken': steps + ['interview_graded']}\n    print('\ud83d\udd2c Agent Node [Reviewer]: Evaluating documentation via Gemini QC...')"
+                },
+                {
+                    "name": "interviewer_agent_node",
+                    "args": [
+                        "state"
+                    ],
+                    "docstring": null,
+                    "source_code": "def interviewer_agent_node(state: AgentState) -> Dict[str, Any]:\n    print(f\"\ud83c\udf99\ufe0f  Agent Node [Interviewer - Persona: {state['interviewer_persona'].upper()}]: Framing interview context...\")\n    historical_gaps = get_historical_weaknesses(limit=3)\n    gap_instruction = ''\n    if historical_gaps:\n        gap_tags = [item['topic'] for item in historical_gaps]\n        gap_instruction = f\"\\nCRITICAL ADAPTIVE BIAS: The candidate has historically struggled with: {', '.join(gap_tags)}. Subtlely target these domains.\"\n    blueprint = state.get('repo_blueprint', {})\n    structural_context = ''\n    if blueprint and 'modules' in blueprint:\n        module_summary = []\n        for mod, details in list(blueprint['modules'].items())[:8]:\n            classes = list(details.get('classes', {}).keys())\n            funcs = details.get('standalone_functions', [])\n            module_summary.append(f\"Module '{mod}' contains Classes: {classes}, Standalone Functions: {funcs}\")\n        structural_context = f'\\nACTUAL REPOSITORY ARCHITECTURE STRUCTURE:\\n{chr(10).join(module_summary)}\\nFormulate questions that challenge the candidate to explain how these modules connect, their design patterns (e.g., repository patterns, state machines), or architectural trade-offs.'\n    persona_prompts = {'collaborator': \"You are 'The Helpful Collaborator', a friendly pair-programmer. Guide the candidate gently, give conceptual hints, and treat this like a team project.\", 'traditionalist': \"You are 'The Strict Traditionalist', an algorithm purist. Speak concisely, stay cold, and focus heavily on raw syntax rules, decoupling mechanics, and optimal design patterns.\", 'architect': \"You are 'The Pragmatic Architect', a production startup tech lead. Focus strictly on real-world constraints, scalability bottlenecks, deployment friction, and operational safety.\"}\n    base_persona = persona_prompts.get(state['interviewer_persona'], 'You are an expert technical interviewer.')\n    system_instruction = f\"{base_persona}\\nYour target difficulty level is set to: {state['difficulty'].upper()}.\\nYour goal is to formulate and output ONLY the text for Question #{state['current_question_index']} of 5 testing the candidate's understanding of their specific repository architecture.{gap_instruction}{structural_context}\\nDo not include grading metrics or conversational meta-commentary.\"\n    mock_trigger_prompt = f\"Generate interview question #{state['current_question_index']} based on the verified structural project context.\"\n    response = ai_client.models.generate_content(model='gemini-2.5-flash', contents=mock_trigger_prompt, config={'system_instruction': system_instruction})\n    return {'current_draft': response.text, 'steps_taken': state.get('steps_taken', []) + ['interviewer_question_generated']}"
+                },
+                {
+                    "name": "mode_router",
+                    "args": [
+                        "state"
+                    ],
+                    "docstring": "Directs the initial routing track.",
+                    "source_code": "def mode_router(state: AgentState) -> str:\n    \"\"\"\n    Directs the initial routing track.\n    \"\"\"\n    if state.get('session_mode') == 'interview':\n        if 'INITIALIZE_INTERVIEW_SESSION' in state['query'] or state.get('current_question_index', 1) == 1:\n            return 'generate_interview_turn'\n        return 'evaluate_quality'\n    return 'write_docs'"
+                },
+                {
+                    "name": "post_evaluation_router",
+                    "args": [
+                        "state"
+                    ],
+                    "docstring": "Determines where to route after an evaluation node finishes processing.",
+                    "source_code": "def post_evaluation_router(state: AgentState) -> str:\n    \"\"\"\n    Determines where to route after an evaluation node finishes processing.\n    \"\"\"\n    if state.get('session_mode') == 'interview':\n        if state.get('current_question_index', 1) <= 5:\n            return 'generate_interview_turn'\n        else:\n            evaluation_scores = state.get('evaluation_scores', [])\n            category_scores = {'architecture': 50.0, 'backend_logic': 50.0, 'security': 50.0, 'databases': 50.0, 'scalability': 50.0}\n            weaknesses = []\n            count = 0\n            for entry in evaluation_scores:\n                payload = entry.get('json_payload') or {}\n                if payload:\n                    count += 1\n                    category_scores['architecture'] += payload.get('architecture_percentage', 50)\n                    category_scores['backend_logic'] += payload.get('backend_logic_percentage', 50)\n                    category_scores['security'] += payload.get('security_percentage', 50)\n                    category_scores['databases'] += payload.get('databases_percentage', 50)\n                    category_scores['scalability'] += payload.get('scalability_percentage', 50)\n                    weaknesses.extend(payload.get('flagged_weaknesses', []))\n            if count > 0:\n                category_scores = {k: v / count for k, v in category_scores.items()}\n            weaknesses = [w.strip().lower() for w in set(weaknesses) if w and isinstance(w, str)]\n            metadata = {'session_mode': state.get('session_mode', 'interview'), 'difficulty': state.get('difficulty', 'medium'), 'interviewer_persona': state.get('interviewer_persona', 'architect')}\n            try:\n                log_completed_session(metadata, category_scores, weaknesses)\n            except Exception as log_error:\n                print(f'  \u26a0\ufe0f Failed to persist completed session: {log_error}')\n            return 'end'\n    if state.get('review_feedback'):\n        return 'write_docs'\n    return 'end'"
+                }
+            ],
+            "module": "agents/orchestrator.py"
+        },
+        {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\analyzer\\crawler.py",
+            "classes": [],
+            "standalone_functions": [
+                {
+                    "name": "crawl_repository",
+                    "args": [
+                        "repo_path"
+                    ],
+                    "docstring": "Sifts through a directory recursively, finds all Python files,\nand runs them through our AST parser.",
+                    "source_code": "def crawl_repository(repo_path: str) -> list:\n    \"\"\"\n    Sifts through a directory recursively, finds all Python files,\n    and runs them through our AST parser.\n    \"\"\"\n    all_parsed_data = []\n    if not os.path.exists(repo_path):\n        print(f\"Error: The path '{repo_path}' does not exist.\")\n        return all_parsed_data\n    for root, dirs, files in os.walk(repo_path):\n        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['venv', '__pycache__', 'env']]\n        for file in files:\n            if file.endswith('.py'):\n                full_file_path = os.path.join(root, file)\n                print(f'Scanning: {full_file_path}')\n                file_data = parse_python_file(full_file_path)\n                module_rel = os.path.relpath(full_file_path, repo_path).replace(os.sep, '/')\n                if file_data:\n                    if isinstance(file_data, dict):\n                        file_data.setdefault('file_path', full_file_path)\n                        file_data.setdefault('module', module_rel)\n                        all_parsed_data.append(file_data)\n                    else:\n                        all_parsed_data.append({'file_path': full_file_path, 'module': module_rel, 'raw': file_data})\n    return all_parsed_data"
+                }
+            ],
+            "module": "analyzer/crawler.py"
+        },
+        {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\analyzer\\parser.py",
+            "classes": [],
+            "standalone_functions": [
+                {
+                    "name": "parse_python_file",
+                    "args": [
+                        "file_path"
+                    ],
+                    "docstring": "This function will read a Python file and turn its structure into data.",
+                    "source_code": "def parse_python_file(file_path: str):\n    \"\"\"\n    This function will read a Python file and turn its structure into data.\n    \"\"\"\n    with open(file_path, 'r', encoding='utf-8') as source_file:\n        source_code = source_file.read()\n    try:\n        tree = ast.parse(source_code)\n    except SyntaxError as e:\n        print(f'Skipping {file_path} due to a syntax error: {e}')\n        return None\n    file_metadata = {'file_path': file_path, 'classes': [], 'standalone_functions': []}\n    for node in tree.body:\n        if isinstance(node, ast.ClassDef):\n            class_info = {'name': node.name, 'docstring': ast.get_docstring(node), 'methods': []}\n            for sub_node in node.body:\n                if isinstance(sub_node, ast.FunctionDef):\n                    method_info = {'name': sub_node.name, 'args': [arg.arg for arg in sub_node.args.args], 'docstring': ast.get_docstring(sub_node), 'source_code': ast.unparse(sub_node)}\n                    class_info['methods'].append(method_info)\n            file_metadata['classes'].append(class_info)\n        elif isinstance(node, ast.FunctionDef):\n            func_info = {'name': node.name, 'args': [arg.arg for arg in node.args.args], 'docstring': ast.get_docstring(node), 'source_code': ast.unparse(node)}\n            file_metadata['standalone_functions'].append(func_info)\n    return file_metadata"
+                }
+            ],
+            "module": "analyzer/parser.py"
+        },
+        {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\analyzer\\repo_graph.py",
+            "classes": [
+                {
+                    "name": "CodebaseGraphAnalyzer",
+                    "docstring": "AST visitor to map out functions, imports, and classes inside a single Python file.",
+                    "methods": [
+                        {
+                            "name": "__init__",
+                            "args": [
+                                "self",
+                                "file_path"
+                            ],
+                            "docstring": null,
+                            "source_code": "def __init__(self, file_path: str):\n    self.file_path = file_path\n    self.meta = {'language': 'python', 'imports': [], 'classes': {}, 'standalone_functions': []}\n    self.current_class = None"
+                        },
+                        {
+                            "name": "visit_Import",
+                            "args": [
+                                "self",
+                                "node"
+                            ],
+                            "docstring": null,
+                            "source_code": "def visit_Import(self, node):\n    for alias in node.names:\n        self.meta['imports'].append(alias.name)\n    self.generic_visit(node)"
+                        },
+                        {
+                            "name": "visit_ImportFrom",
+                            "args": [
+                                "self",
+                                "node"
+                            ],
+                            "docstring": null,
+                            "source_code": "def visit_ImportFrom(self, node):\n    if node.module:\n        self.meta['imports'].append(node.module)\n    self.generic_visit(node)"
+                        },
+                        {
+                            "name": "visit_ClassDef",
+                            "args": [
+                                "self",
+                                "node"
+                            ],
+                            "docstring": null,
+                            "source_code": "def visit_ClassDef(self, node):\n    class_name = node.name\n    self.meta['classes'][class_name] = {'methods': [], 'base_classes': [ast.unparse(b) for b in node.bases]}\n    self.current_class = class_name\n    self.generic_visit(node)\n    self.current_class = None"
+                        },
+                        {
+                            "name": "visit_FunctionDef",
+                            "args": [
+                                "self",
+                                "node"
+                            ],
+                            "docstring": null,
+                            "source_code": "def visit_FunctionDef(self, node):\n    func_name = node.name\n    if self.current_class:\n        self.meta['classes'][self.current_class]['methods'].append(func_name)\n    else:\n        self.meta['standalone_functions'].append(func_name)\n    self.generic_visit(node)"
+                        }
+                    ]
+                }
+            ],
+            "standalone_functions": [
+                {
+                    "name": "parse_js_ts_file",
+                    "args": [
+                        "file_path",
+                        "content"
+                    ],
+                    "docstring": "Extracts symbols, exports, and imports from JavaScript/TypeScript files using optimized regex scanning.",
+                    "source_code": "def parse_js_ts_file(file_path: str, content: str) -> Dict[str, Any]:\n    \"\"\"Extracts symbols, exports, and imports from JavaScript/TypeScript files using optimized regex scanning.\"\"\"\n    meta = {'language': 'javascript/typescript', 'imports': [], 'classes': {}, 'standalone_functions': []}\n    es6_imports = re.findall('(?:import|from)\\\\s+[\\'\\\\\"]([^\\'\\\\\"]+)[\\'\\\\\"]', content)\n    commonjs_imports = re.findall('require\\\\s*\\\\(\\\\s*[\\'\\\\\"]([^\\'\\\\\"]+)[\\'\\\\\"]\\\\s*\\\\)', content)\n    for imp in set(es6_imports + commonjs_imports):\n        if not imp.startswith('.'):\n            meta['imports'].append(imp)\n    classes = re.findall('class\\\\s+(\\\\w+)(?:\\\\s+extends\\\\s+(\\\\w+))?', content)\n    for cls, base in classes:\n        meta['classes'][cls] = {'methods': [], 'base_classes': [base] if base else []}\n    found_functions = re.findall('function\\\\s+(\\\\w+)\\\\s*\\\\(', content)\n    found_arrow_funcs = re.findall('(?:const|let|var)\\\\s+(\\\\w+)\\\\s*=\\\\s*(?:\\\\([^)]*\\\\)|_\\\\w*)\\\\s*=>', content)\n    for func in set(found_functions + found_arrow_funcs):\n        meta['standalone_functions'].append(func)\n    return meta"
+                },
+                {
+                    "name": "generate_repository_graph",
+                    "args": [
+                        "root_dir"
+                    ],
+                    "docstring": "Crawl the workspace to compile a high-level Python & JS/TS dependency and structural graph map.",
+                    "source_code": "def generate_repository_graph(root_dir: str) -> Dict[str, Any]:\n    \"\"\"Crawl the workspace to compile a high-level Python & JS/TS dependency and structural graph map.\"\"\"\n    repo_graph = {'project_root': os.path.basename(os.path.abspath(root_dir)), 'manifest_dependencies': {}, 'directory_tree': {}, 'modules': {}}\n    package_json_path = os.path.join(root_dir, 'package.json')\n    if os.path.exists(package_json_path):\n        try:\n            with open(package_json_path, 'r', encoding='utf-8') as f:\n                pkg_data = json.load(f)\n                repo_graph['manifest_dependencies'] = {**pkg_data.get('dependencies', {}), **pkg_data.get('devDependencies', {})}\n        except Exception as e:\n            repo_graph['manifest_dependencies'] = {'error': f'Failed to parse package.json: {e}'}\n    supported_extensions = ('.py', '.js', '.ts', '.jsx', '.tsx')\n    for root, dirs, files in os.walk(root_dir):\n        if any((ignored in root for ignored in ['.git', '__pycache__', 'node_modules', 'venv', '.venv', 'chroma_db', 'storage', 'scorecards', 'dist', 'build', '.next'])):\n            continue\n        rel_path = os.path.relpath(root, root_dir)\n        dir_key = 'root' if rel_path == '.' else rel_path\n        tracked_files = [f for f in files if f.endswith(supported_extensions)]\n        if tracked_files:\n            repo_graph['directory_tree'][dir_key] = tracked_files\n        for file in files:\n            if file.endswith(supported_extensions):\n                full_path = os.path.join(root, file)\n                module_key = os.path.relpath(full_path, root_dir).replace(os.sep, '/')\n                try:\n                    with open(full_path, 'r', encoding='utf-8') as f:\n                        file_content = f.read()\n                    if file.endswith('.py'):\n                        tree = ast.parse(file_content, filename=file)\n                        analyzer = CodebaseGraphAnalyzer(module_key)\n                        analyzer.visit(tree)\n                        repo_graph['modules'][module_key] = analyzer.meta\n                    else:\n                        repo_graph['modules'][module_key] = parse_js_ts_file(module_key, file_content)\n                except Exception as e:\n                    repo_graph['modules'][module_key] = {'error': f'Failed to parse source tree elements: {e}'}\n    output_path = os.path.join(root_dir, 'repo_blueprint.json')\n    with open(output_path, 'w', encoding='utf-8') as out:\n        json.dump(repo_graph, out, indent=4)\n    print(f\"\ud83c\udfaf [Repository Graph]: Blueprint map successfully compiled to '{output_path}'.\")\n    return repo_graph"
+                }
+            ],
+            "module": "analyzer/repo_graph.py"
+        },
+        {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\analyzer\\vector_store.py",
+            "classes": [],
+            "standalone_functions": [
+                {
+                    "name": "get_vector_collection",
+                    "args": [],
+                    "docstring": "Initializes a persistent database storage folder on disk \nand sets up an indexing collection.",
+                    "source_code": "def get_vector_collection():\n    \"\"\"\n    Initializes a persistent database storage folder on disk \n    and sets up an indexing collection.\n    \"\"\"\n    storage_dir = os.path.join(os.getcwd(), 'chroma_db_data')\n    client = chromadb.PersistentClient(path=storage_dir)\n    collection = client.get_or_create_collection(name='repository_methods')\n    return collection"
+                },
+                {
+                    "name": "store_codebase_vectors",
+                    "args": [
+                        "parsed_files_list"
+                    ],
+                    "docstring": "Takes the code mapping array from our crawler, isolates the code blocks,\nand inserts them directly into our vector storage engine.",
+                    "source_code": "def store_codebase_vectors(parsed_files_list: list):\n    \"\"\"\n    Takes the code mapping array from our crawler, isolates the code blocks,\n    and inserts them directly into our vector storage engine.\n    \"\"\"\n    collection = get_vector_collection()\n    documents = []\n    metadatas = []\n    ids = []\n    counter = 1\n    for file_info in parsed_files_list:\n        file_path = file_info['file_path']\n        for cls in file_info['classes']:\n            class_name = cls['name']\n            for method in cls['methods']:\n                documents.append(method['source_code'])\n                metadatas.append({'file_path': file_path, 'scope': 'class_method', 'parent_symbol': class_name, 'symbol_name': method['name'], 'docstring': method['docstring'] or ''})\n                ids.append(f'id_symbol_{counter}')\n                counter += 1\n        for func in file_info['standalone_functions']:\n            documents.append(func['source_code'])\n            metadatas.append({'file_path': file_path, 'scope': 'standalone_function', 'parent_symbol': 'None', 'symbol_name': func['name'], 'docstring': func['docstring'] or ''})\n            ids.append(f'id_symbol_{counter}')\n            counter += 1\n    if documents:\n        collection.upsert(documents=documents, metadatas=metadatas, ids=ids)\n        print(f'\\n Successfully embedded and stored {len(documents)} functional code vectors.')\n    else:\n        print('\\nNo functional code blocks found to embed.')"
+                }
+            ],
+            "module": "analyzer/vector_store.py"
+        },
+        {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\storage\\memory_ledger.py",
+            "classes": [],
+            "standalone_functions": [
+                {
+                    "name": "get_db_connection",
+                    "args": [],
+                    "docstring": "Establishes a thread-safe connection to the local SQLite ledger.",
+                    "source_code": "def get_db_connection():\n    \"\"\"Establishes a thread-safe connection to the local SQLite ledger.\"\"\"\n    conn = sqlite3.connect(DB_PATH)\n    conn.row_factory = sqlite3.Row\n    return conn"
+                },
+                {
+                    "name": "initialize_ledger",
+                    "args": [],
+                    "docstring": "Initialises the database schemas if they do not already exist on disk.",
+                    "source_code": "def initialize_ledger():\n    \"\"\"Initialises the database schemas if they do not already exist on disk.\"\"\"\n    conn = get_db_connection()\n    cursor = conn.cursor()\n    cursor.execute('\\n        CREATE TABLE IF NOT EXISTS sessions (\\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\\n            timestamp TEXT NOT NULL,\\n            session_mode TEXT NOT NULL,\\n            difficulty TEXT NOT NULL,\\n            interviewer_persona TEXT NOT NULL\\n        )\\n    ')\n    cursor.execute('\\n        CREATE TABLE IF NOT EXISTS category_scores (\\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\\n            session_id INTEGER NOT NULL,\\n            category_name TEXT NOT NULL,\\n            score_percentage REAL NOT NULL,\\n            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE\\n        )\\n    ')\n    cursor.execute('\\n        CREATE TABLE IF NOT EXISTS weakness_tracker (\\n            topic_tag TEXT PRIMARY KEY,\\n            occurrence_count INTEGER DEFAULT 1,\\n            last_flagged TEXT NOT NULL\\n        )\\n    ')\n    conn.commit()\n    conn.close()\n    print('\ud83d\udcbe [Memory Ledger]: Adaptive persistence engine initialised successfully.')"
+                },
+                {
+                    "name": "log_completed_session",
+                    "args": [
+                        "metadata",
+                        "scores",
+                        "weaknesses"
+                    ],
+                    "docstring": "Saves the entire performance blueprint to the database at the end of a run.\nIncrements the historical frequency of missing engineering markers.",
+                    "source_code": "def log_completed_session(metadata: Dict[str, Any], scores: Dict[str, float], weaknesses: List[str]):\n    \"\"\"\n    Saves the entire performance blueprint to the database at the end of a run.\n    Increments the historical frequency of missing engineering markers.\n    \"\"\"\n    conn = get_db_connection()\n    cursor = conn.cursor()\n    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')\n    try:\n        cursor.execute('\\n            INSERT INTO sessions (timestamp, session_mode, difficulty, interviewer_persona)\\n            VALUES (?, ?, ?, ?)\\n        ', (now_str, metadata['session_mode'], metadata['difficulty'], metadata['interviewer_persona']))\n        session_id = cursor.lastrowid\n        for category, score in scores.items():\n            cursor.execute('\\n                INSERT INTO category_scores (session_id, category_name, score_percentage)\\n                VALUES (?, ?, ?)\\n            ', (session_id, category, score))\n        for topic in weaknesses:\n            cursor.execute('\\n                INSERT INTO weakness_tracker (topic_tag, occurrence_count, last_flagged)\\n                VALUES (?, 1, ?)\\n                ON CONFLICT(topic_tag) DO UPDATE SET \\n                    occurrence_count = occurrence_count + 1,\\n                    last_flagged = ?\\n            ', (topic.strip().lower(), now_str, now_str))\n        conn.commit()\n        print(f'\ud83d\udcbe [Memory Ledger]: Successfully synced performance metrics to Session Profile #{session_id}.')\n    except Exception as e:\n        conn.rollback()\n        print(f'\u26a0\ufe0f [Memory Ledger Error]: Failed to write session data: {e}')\n    finally:\n        conn.close()"
+                },
+                {
+                    "name": "get_historical_weaknesses",
+                    "args": [
+                        "limit"
+                    ],
+                    "docstring": "Queries the database for your highest-frequency conceptual gaps.\nUsed by the Interview Agent to dynamically adjust question focus.",
+                    "source_code": "def get_historical_weaknesses(limit: int=5) -> List[Dict[str, Any]]:\n    \"\"\"\n    Queries the database for your highest-frequency conceptual gaps.\n    Used by the Interview Agent to dynamically adjust question focus.\n    \"\"\"\n    conn = get_db_connection()\n    cursor = conn.cursor()\n    cursor.execute('\\n        SELECT topic_tag, occurrence_count \\n        FROM weakness_tracker \\n        WHERE occurrence_count > 0 \\n        ORDER BY occurrence_count DESC \\n        LIMIT ?\\n    ', (limit,))\n    rows = cursor.fetchall()\n    conn.close()\n    return [{'topic': row['topic_tag'], 'weight': row['occurrence_count']} for row in rows]"
+                }
+            ],
+            "module": "storage/memory_ledger.py"
+        },
+        {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\storage\\report_exporter.py",
+            "classes": [],
+            "standalone_functions": [
+                {
+                    "name": "export_session_report",
+                    "args": [
+                        "metadata",
+                        "scores",
+                        "weaknesses",
+                        "grades"
+                    ],
+                    "docstring": "Compiles session evaluation metrics into a beautifully structured Markdown report file.",
+                    "source_code": "def export_session_report(metadata: Dict[str, Any], scores: Dict[str, float], weaknesses: List[str], grades: List[Dict[str, Any]]) -> str:\n    \"\"\"\n    Compiles session evaluation metrics into a beautifully structured Markdown report file.\n    \"\"\"\n    os.makedirs(OUTPUT_DIR, exist_ok=True)\n    now = datetime.now()\n    timestamp_str = now.strftime('%Y-%m-%d %H:%M:%S')\n    file_safe_date = now.strftime('%Y%m%d_%H%M%S')\n    filename = f\"scorecard_{metadata['interviewer_persona']}_{file_safe_date}.md\"\n    full_path = os.path.join(OUTPUT_DIR, filename)\n\n    def get_status_emoji(percentage: float) -> str:\n        if percentage >= 85:\n            return '\u2705 Proficient'\n        if percentage >= 60:\n            return '\u26a0\ufe0f Developing'\n        return '\u274c Critical Focus'\n    md_content = f\"# \ud83d\udcca Technical Evaluation Performance Report\\n**Generated:** `{timestamp_str}`  \\n**Track Mode:** `{metadata['session_mode'].upper()}`  \\n**Target Difficulty:** `{metadata['difficulty'].upper()}`  \\n**Assigned Interviewer Archetype:** `{metadata['interviewer_persona'].upper()}`\\n\\n---\\n\\n## \ud83d\udcc8 Core Engineering Pillars Breakdown\\n\\n| Technical Competency Pillar | Score Percentage | Status Assessment |\\n| :--- | :---: | :--- |\\n| \ud83c\udfd7\ufe0f Architecture & Structural Design | {scores['Architecture']:.1f}% | {get_status_emoji(scores['Architecture'])} |\\n| \u2699\ufe0f Backend Logic & Syntax Execution | {scores['Backend Logic']:.1f}% | {get_status_emoji(scores['Backend Logic'])} |\\n| \ud83d\udd12 Security, Vulnerabilities & Bounds | {scores['Security']:.1f}% | {get_status_emoji(scores['Security'])} |\\n| \ud83d\uddc4\ufe0f Databases, Indexing & Data Flow | {scores['Databases']:.1f}% | {get_status_emoji(scores['Databases'])} |\\n| \ud83d\ude80 Scalability, Benchmarks & Big-O | {scores['Scalability']:.1f}% | {get_status_emoji(scores['Scalability'])} |\\n\\n---\\n\\n## \ud83d\udd0d Conceptual Weakness Tracker\\nThe evaluator flagged the following specific domain gaps during this session. These tags have been synced to your persistent memory ledger to optimize future interview focus variants:\\n\\n\"\n    if weaknesses:\n        for topic in set(weaknesses):\n            md_content += f'- \u26a0\ufe0f `{topic.strip().lower()}`\\n'\n    else:\n        md_content += '- \ud83c\udf89 No systemic critical weaknesses flagged this round. Exceptional performance.\\n'\n    md_content += '\\n---\\n\\n## \ud83d\udccc Question-by-Question Evaluation History\\n'\n    for grade in grades:\n        md_content += f\"### \u2753 Question #{grade['question_num']}\\n\"\n        formatted_eval = grade['raw_evaluation'].replace('\\n', '\\n> ')\n        md_content += f'> {formatted_eval}\\n\\n'\n        md_content += '--- \\n\\n'\n    md_content += '\ud83e\udd16 *Keep refining your codebase architecture and pushing boundaries. Session End.*'\n    with open(full_path, 'w', encoding='utf-8') as f:\n        f.write(md_content.strip())\n    print(f\"\ud83d\udccb [Report Exporter]: Performance scorecard successfully saved to '{full_path}'.\")\n    return full_path"
+                }
+            ],
+            "module": "storage/report_exporter.py"
+        },
+        {
+            "file_path": "C:\\Users\\Double G\\OneDrive\\Documents\\VS projects\\reposeer-core\\studio\\node_modules\\flatted\\python\\flatted.py",
+            "classes": [
+                {
+                    "name": "_Known",
+                    "docstring": null,
+                    "methods": [
+                        {
+                            "name": "__init__",
+                            "args": [
+                                "self"
+                            ],
+                            "docstring": null,
+                            "source_code": "def __init__(self):\n    self.key = []\n    self.value = []"
+                        }
+                    ]
+                },
+                {
+                    "name": "_String",
+                    "docstring": null,
+                    "methods": [
+                        {
+                            "name": "__init__",
+                            "args": [
+                                "self",
+                                "value"
+                            ],
+                            "docstring": null,
+                            "source_code": "def __init__(self, value):\n    self.value = value"
+                        }
+                    ]
+                }
+            ],
+            "standalone_functions": [
+                {
+                    "name": "_array_keys",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _array_keys(value):\n    for i in range(len(value)):\n        yield i"
+                },
+                {
+                    "name": "_object_keys",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _object_keys(value):\n    for key in value:\n        yield key"
+                },
+                {
+                    "name": "_is_array",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _is_array(value):\n    return isinstance(value, (list, tuple))"
+                },
+                {
+                    "name": "_is_object",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _is_object(value):\n    return isinstance(value, dict)"
+                },
+                {
+                    "name": "_is_string",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _is_string(value):\n    return isinstance(value, str)"
+                },
+                {
+                    "name": "_index",
+                    "args": [
+                        "known",
+                        "input",
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _index(known, input, value):\n    input.append(value)\n    index = str(len(input) - 1)\n    known.key.append(value)\n    known.value.append(index)\n    return index"
+                },
+                {
+                    "name": "_relate",
+                    "args": [
+                        "known",
+                        "input",
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _relate(known, input, value):\n    if _is_string(value) or _is_array(value) or _is_object(value):\n        try:\n            return known.value[known.key.index(value)]\n        except:\n            return _index(known, input, value)\n    return value"
+                },
+                {
+                    "name": "_resolver",
+                    "args": [
+                        "input",
+                        "lazy",
+                        "parsed"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _resolver(input, lazy, parsed):\n\n    def resolver(output):\n        keys = _array_keys(output) if _is_array(output) else _object_keys(output) if _is_object(output) else []\n        for key in keys:\n            value = output[key]\n            if isinstance(value, _String):\n                tmp = input[int(value.value)]\n                output[key] = tmp\n                if (_is_array(tmp) or _is_object(tmp)) and tmp not in parsed:\n                    parsed.append(tmp)\n                    lazy.append([output, key])\n        return output\n    return resolver"
+                },
+                {
+                    "name": "_transform",
+                    "args": [
+                        "known",
+                        "input",
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _transform(known, input, value):\n    if _is_array(value):\n        output = []\n        for val in value:\n            output.append(_relate(known, input, val))\n        return output\n    if _is_object(value):\n        obj = {}\n        for key in value:\n            obj[key] = _relate(known, input, value[key])\n        return obj\n    return value"
+                },
+                {
+                    "name": "_wrap",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def _wrap(value):\n    if _is_string(value):\n        return _String(value)\n    if _is_array(value):\n        i = 0\n        for val in value:\n            value[i] = _wrap(val)\n            i += 1\n    elif _is_object(value):\n        for key in value:\n            value[key] = _wrap(value[key])\n    return value"
+                },
+                {
+                    "name": "parse",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def parse(value, *args, **kwargs):\n    json = _json.loads(value, *args, **kwargs)\n    wrapped = []\n    for value in json:\n        wrapped.append(_wrap(value))\n    input = []\n    for value in wrapped:\n        if isinstance(value, _String):\n            input.append(value.value)\n        else:\n            input.append(value)\n    value = input[0]\n    lazy = []\n    revive = _resolver(input, lazy, [value])\n    value = revive(value)\n    i = 0\n    while i < len(lazy):\n        o, k = lazy[i]\n        i += 1\n        o[k] = revive(o[k])\n    return value"
+                },
+                {
+                    "name": "stringify",
+                    "args": [
+                        "value"
+                    ],
+                    "docstring": null,
+                    "source_code": "def stringify(value, *args, **kwargs):\n    known = _Known()\n    input = []\n    output = []\n    i = int(_index(known, input, value))\n    while i < len(input):\n        output.append(_transform(known, input, input[i]))\n        i += 1\n    return _json.dumps(output, *args, **kwargs)"
+                }
+            ],
+            "module": "studio/node_modules/flatted/python/flatted.py"
+        }
+    ]
+}

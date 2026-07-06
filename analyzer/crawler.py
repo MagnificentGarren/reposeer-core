@@ -24,14 +24,28 @@ def crawl_repository(repo_path: str) -> list:
             # We are targeting only Python files for this initial sprint
             if file.endswith(".py"):
                 full_file_path = os.path.join(root, file)
-                
+
                 print(f"Scanning: {full_file_path}")
-                
+
                 # Use the parser we built in Step 1.1
                 file_data = parse_python_file(full_file_path)
-                
+
+                # Normalize the parser output so each item includes a stable file identifier
+                module_rel = os.path.relpath(full_file_path, repo_path).replace(os.sep, '/')
+
                 if file_data:
-                    all_parsed_data.append(file_data)
+                    if isinstance(file_data, dict):
+                        # Ensure expected metadata keys exist
+                        file_data.setdefault('file_path', full_file_path)
+                        file_data.setdefault('module', module_rel)
+                        all_parsed_data.append(file_data)
+                    else:
+                        # Wrap non-dict parser returns into a consistent dict
+                        all_parsed_data.append({
+                            'file_path': full_file_path,
+                            'module': module_rel,
+                            'raw': file_data
+                        })
 
     return all_parsed_data
 

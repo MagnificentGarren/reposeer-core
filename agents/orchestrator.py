@@ -5,10 +5,12 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai.errors import APIError
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 import chromadb
 from google.genai import types
 from storage.memory_ledger import get_historical_weaknesses
 import json
+import difflib
 from storage.memory_ledger import log_completed_session
 
 # Explicitly execute the environment variable loader
@@ -79,26 +81,147 @@ def router_node(state: AgentState) -> Dict[str, Any]:
         except Exception as e:
             print(f"   ↳ ⚠️ Query condensation skipped due to error: {e}")
 
-    # 2. Query persistent storage collection
-    chroma_client = chromadb.PersistentClient(path="./chroma_db_data")
-    collection = chroma_client.get_collection(name="repository_methods")
-    
-    results = collection.query(
-        query_texts=[search_query],
-        n_results=2
-    )
-    
+    # 2. Prefer using the active session blueprint if provided in state
     retrieved_docs = []
-    if results and results["documents"] and results["documents"][0]:
-        for doc, metadata in zip(results["documents"][0], results["metadatas"][0]):
-            retrieved_docs.append({
-                "file": metadata.get("file_path", "unknown"),
-                "scope": metadata.get("scope", "unknown"),
-                "symbol_name": metadata.get("symbol_name", "unknown"),
-                "content": doc
-            })
-            print(f"   ↳ Extracted relevant {metadata.get('scope')}: '{metadata.get('symbol_name')}' from {metadata.get('file_path')}")
-            
+    blueprint = state.get("repo_blueprint") or {}
+
+    # If blueprint is empty, attempt to load from disk using a thread id if present in state
+    if not blueprint:
+        thread_id = None
+        # Attempt to find a thread id in state values
+        thread_id = state.get("thread_id") or state.get("session_id")
+        if not thread_id:
+            # As a last resort, look for a configurable entry inside state if present
+            config_block = state.get("configurable") if isinstance(state.get("configurable"), dict) else None
+            if config_block:
+                thread_id = config_block.get("thread_id")
+
+        if thread_id:
+            session_blueprint_file = os.path.join("storage", "blueprints", f"{thread_id}.json")
+            if os.path.exists(session_blueprint_file):
+                try:
+                    with open(session_blueprint_file, "r", encoding="utf-8") as f:
+                        blueprint = json.load(f)
+                        print(f"   ↳ Loaded session blueprint from {session_blueprint_file}")
+                except Exception as e:
+                    print(f"   ↳ ⚠️ Failed to load blueprint file: {e}")
+
+    # If we have a blueprint with mapped files, search within it for relevant symbols or functions
+    if blueprint and isinstance(blueprint, dict) and blueprint.get("files"):
+        files_map = blueprint.get("files", {})
+        # Search for matching symbols in the mapped files
+        for fname, meta in files_map.items():
+            try:
+                # Look for standalone functions and classes metadata
+                funcs = meta.get("standalone_functions", []) if isinstance(meta, dict) else []
+                classes = [c.get("name") for c in meta.get("classes", [])] if isinstance(meta, dict) else []
+
+                matched = False
+                # Build candidate symbol list and map back to original metadata
+                candidate_map = {}
+                candidate_names = []
+                for fn in funcs:
+                    name = fn.get("name") if isinstance(fn, dict) else (fn if isinstance(fn, str) else None)
+                    if name:
+                        candidate_map[name] = ("function", fn)
+                        candidate_names.append(name)
+
+                for cls in classes:
+                    if cls:
+                        candidate_map[cls] = ("class", cls)
+                        candidate_names.append(cls)
+
+                # Exact substring matches first
+                for name in candidate_names:
+                    if search_query.lower() in name.lower() or name.lower() in search_query.lower():
+                        kind, payload = candidate_map[name]
+                        if kind == "function":
+                            fn = payload
+                            retrieved_docs.append({
+                                "file": meta.get("file_path", fname),
+                                "scope": "function",
+                                "symbol_name": fn.get("name") if isinstance(fn, dict) else fn,
+                                "content": (fn.get("source_code") if isinstance(fn, dict) else "") or json.dumps(fn)
+                            })
+                        else:
+                            retrieved_docs.append({
+                                "file": meta.get("file_path", fname),
+                                "scope": "class",
+                                "symbol_name": name,
+                                "content": json.dumps(meta.get("classes", []))
+                            })
+                        matched = True
+
+                # If no substring matches, try fuzzy matching using difflib
+                if not matched and candidate_names:
+                    close = difflib.get_close_matches(search_query, candidate_names, n=3, cutoff=0.6)
+                    for cname in close:
+                        kind, payload = candidate_map.get(cname, (None, None))
+                        if kind == "function":
+                            fn = payload
+                            retrieved_docs.append({
+                                "file": meta.get("file_path", fname),
+                                "scope": "function",
+                                "symbol_name": fn.get("name") if isinstance(fn, dict) else fn,
+                                "content": (fn.get("source_code") if isinstance(fn, dict) else "") or json.dumps(fn)
+                            })
+                        elif kind == "class":
+                            retrieved_docs.append({
+                                "file": meta.get("file_path", fname),
+                                "scope": "class",
+                                "symbol_name": cname,
+                                "content": json.dumps(meta.get("classes", []))
+                            })
+                    if close:
+                        matched = True
+
+                # If no direct symbol matches but the blueprint contains source text, include a lightweight snippet
+                if not matched and isinstance(meta, dict):
+                    snippet = ""
+                    if meta.get("standalone_functions"):
+                        snippet = json.dumps(meta.get("standalone_functions")[:1])
+                    elif meta.get("classes"):
+                        snippet = json.dumps(meta.get("classes")[:1])
+
+                    if snippet:
+                        retrieved_docs.append({
+                            "file": meta.get("file_path", fname),
+                            "scope": "module",
+                            "symbol_name": fname,
+                            "content": snippet
+                        })
+            except Exception as e:
+                print(f"   ↳ Error extracting from blueprint file {fname}: {e}")
+
+        if retrieved_docs:
+            print(f"   ↳ Retrieved {len(retrieved_docs)} docs from session blueprint map.")
+            return {
+                "retrieved_code_vectors": retrieved_docs,
+                "steps_taken": state.get("steps_taken", []) + ["live_routed"]
+            }
+
+    # 3. Fallback: Query persistent storage collection (vector DB)
+    try:
+        chroma_client = chromadb.PersistentClient(path="./chroma_db_data")
+        collection = chroma_client.get_collection(name="repository_methods")
+
+        results = collection.query(
+            query_texts=[search_query],
+            n_results=2
+        )
+
+        if results and results.get("documents") and results["documents"][0]:
+            for doc, metadata in zip(results["documents"][0], results["metadatas"][0]):
+                retrieved_docs.append({
+                    "file": metadata.get("file_path", "unknown"),
+                    "scope": metadata.get("scope", "unknown"),
+                    "symbol_name": metadata.get("symbol_name", "unknown"),
+                    "content": doc
+                })
+                print(f"   ↳ Extracted relevant {metadata.get('scope')}: '{metadata.get('symbol_name')}' from {metadata.get('file_path')}")
+    except Exception as e:
+        print(f"   ↳ ⚠️ Vector DB query failed: {e}")
+
     if not retrieved_docs:
         print("   ↳ ⚠️ Warning: No relevant code vectors found for this query.")
 
@@ -112,8 +235,18 @@ def doc_agent_node(state: AgentState) -> Dict[str, Any]:
     print("📝 Agent Node [Doc Writer]: Generating production response via Gemini...")
     
     code_context = ""
-    for vec in state["retrieved_code_vectors"]:
-        code_context += f"\n--- FILE: {vec['file']} ({vec['scope']}: {vec['symbol_name']}) ---\n{vec['content']}\n"
+    for vec in state.get("retrieved_code_vectors", []):
+        code_context += f"\n--- FILE: {vec.get('file', 'unknown')} ({vec.get('scope', 'unknown')}: {vec.get('symbol_name', 'unknown')}) ---\n{vec.get('content', '')}\n"
+    
+    blueprint = state.get("repo_blueprint", {}) or {}
+    blueprint_summary = ""
+    if blueprint and isinstance(blueprint, dict) and blueprint.get("files"):
+        summary_lines = []
+        for file_name, metadata in list(blueprint["files"].items())[:5]:
+            classes = [c.get("name") for c in metadata.get("classes", [])] if isinstance(metadata.get("classes"), list) else []
+            funcs = [f.get("name") for f in metadata.get("standalone_functions", []) if isinstance(f, dict)] if isinstance(metadata.get("standalone_functions"), list) else []
+            summary_lines.append(f"{file_name}: classes={classes}, functions={funcs}")
+        blueprint_summary = "\n".join(summary_lines)
     
     chat_history_context = ""
     for msg in state.get("messages", []):
@@ -123,14 +256,22 @@ def doc_agent_node(state: AgentState) -> Dict[str, Any]:
         "You are an expert technical AI assistant linked directly to a local codebase. "
         "Your job is to provide clean, technical, and accurate code summaries or answers using the "
         "retrieved code context assets and conversation history. Always format code references within "
-        "proper markdown ticks."
+        "proper markdown ticks. "
+        "If retrieved code context is available, prioritize it above generic guidance. "
+        "If no retrieved vectors are present, fall back to the repository blueprint summary to ground your answer."
     )
     
     user_prompt = ""
     if chat_history_context:
         user_prompt += f"Prior Conversation History:\n{chat_history_context}\n"
-        
-    user_prompt += f"Code Context Assets for Current Turn:\n{code_context}\n\n"
+    
+    if code_context:
+        user_prompt += f"Code Context Assets for Current Turn:\n{code_context}\n\n"
+    elif blueprint_summary:
+        user_prompt += f"Repository Blueprint Summary:\n{blueprint_summary}\n\n"
+    else:
+        user_prompt += "No direct code context was retrieved for this turn. Use the repository blueprint if available and answer as accurately as possible.\n\n"
+
     user_prompt += f"Latest User Query: {state['query']}"
     
     if state.get("review_feedback"):
@@ -293,6 +434,19 @@ def interviewer_agent_node(state: AgentState) -> Dict[str, Any]:
             f"their design patterns (e.g., repository patterns, state machines), or architectural trade-offs."
         )
 
+    active_context_pool = state.get("retrieved_code_vectors", []) or []
+    workspace_name = os.path.basename(blueprint.get("repo_path", "AssetCitadel")) if isinstance(blueprint, dict) else "AssetCitadel"
+    context_str = ""
+    for doc in active_context_pool:
+        if doc.get("content"):
+            context_str += (
+                f"\nEntity: {doc.get('symbol_name', 'unknown')}\n"
+                f"File: {doc.get('file', 'unknown')}\n"
+                f"Scope: {doc.get('scope', 'unknown')}\n"
+                f"Source:\n{doc.get('content')}\n"
+                f"---\n"
+            )
+
     persona_prompts = {
         "collaborator": "You are 'The Helpful Collaborator', a friendly pair-programmer. Guide the candidate gently, give conceptual hints, and treat this like a team project.",
         "traditionalist": "You are 'The Strict Traditionalist', an algorithm purist. Speak concisely, stay cold, and focus heavily on raw syntax rules, decoupling mechanics, and optimal design patterns.",
@@ -301,15 +455,32 @@ def interviewer_agent_node(state: AgentState) -> Dict[str, Any]:
 
     base_persona = persona_prompts.get(state["interviewer_persona"], "You are an expert technical interviewer.")
     
-    system_instruction = (
-        f"{base_persona}\n"
-        f"Your target difficulty level is set to: {state['difficulty'].upper()}.\n"
-        f"Your goal is to formulate and output ONLY the text for Question #{state['current_question_index']} of 5 "
-        f"testing the candidate's understanding of their specific repository architecture.{gap_instruction}{structural_context}\n"
-        f"Do not include grading metrics or conversational meta-commentary."
-    )
-    
-    mock_trigger_prompt = f"Generate interview question #{state['current_question_index']} based on the verified structural project context."
+    if context_str:
+        system_instruction = (
+            f"{base_persona}\n"
+            f"Target Workspace Mounted: {workspace_name}\n"
+            f"Your target difficulty level is set to: {state['difficulty'].upper()}.\n"
+            f"CRITICAL INSTRUCTION: You are strictly evaluating the user's live code base configuration.\n"
+            f"Do NOT ask generic questions about microservices or crypto utilities. Instead, analyze the specific code implementations provided below.\n"
+            f"Challenge the user on their validation boundaries, optimization vectors, or edge-case handling within these actual functions.\n\n"
+            f"---\n"
+            f"MOUNTED BASELINE IMPLEMENTATIONS:\n"
+            f"{context_str}"
+            f"---\n"
+            f"Formulate your technical question directly targeting specific components found above."
+        )
+        mock_trigger_prompt = (
+            f"Generate interview question #{state['current_question_index']} based on the mounted code context and actual extracted implementations."
+        )
+    else:
+        system_instruction = (
+            f"{base_persona}\n"
+            f"Your target difficulty level is set to: {state['difficulty'].upper()}.\n"
+            f"Your goal is to formulate and output ONLY the text for Question #{state['current_question_index']} of 5 "
+            f"testing the candidate's understanding of their specific repository architecture.{gap_instruction}{structural_context}\n"
+            f"Do not include grading metrics or conversational meta-commentary."
+        )
+        mock_trigger_prompt = f"Generate interview question #{state['current_question_index']} based on the verified structural project context."
     
     response = ai_client.models.generate_content(
         model='gemini-2.5-flash',
@@ -433,4 +604,6 @@ workflow.add_conditional_edges(
 # Crucial fix: Once the interviewer node asks a question, wrap the state response turn back to the user
 workflow.add_edge("generate_interview_turn", END)
 
-orchestrator_app = workflow.compile()
+# Initialize the checkpointer and compile the workflow with memory support
+memory_checkpointer = MemorySaver()
+orchestrator_app = workflow.compile(checkpointer=memory_checkpointer)

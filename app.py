@@ -5,6 +5,8 @@ import sqlite3
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+from analyzer.crawler import crawl_repository
+from analyzer.vector_store import store_codebase_vectors
 
 # Force Python to treat the root workspace directory as an accessible module package path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -29,6 +31,10 @@ BLUEPRINT_PATH = "repo_blueprint.json"
 class ChatMessage(BaseModel):
     message: str
     session_id: str = "default_session"
+
+class RepoSelectPayload(BaseModel):
+    repo_path: str
+    session_id: str
 
 @app.get("/api/telemetry")
 def get_telemetry_data():
@@ -73,6 +79,60 @@ def get_telemetry_data():
 
     return response_data
 
+@app.post("/api/repo/select")
+def select_and_scan_repository(payload: RepoSelectPayload):
+    target_path = payload.repo_path.strip()
+
+    if not os.path.exists(target_path):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Target path layout not found on this system: '{target_path}'"
+        )
+
+    try:
+        print(f"📁 Initializing deep AST crawl on target workspace: {target_path}")
+
+        # 2. Trigger your crawler logic directly
+        parsed_list = crawl_repository(target_path)
+
+        # 🌟 WRAP the flat array into a standardized blueprint dictionary schema
+        blueprint_data = {
+            "repo_path": target_path,
+            # Use module-relative paths as keys when present to avoid basename collisions
+            "files": {
+                (item.get("module") or os.path.basename(item.get("file_path", "module"))): item
+                for item in parsed_list if isinstance(item, dict)
+            } if parsed_list and isinstance(parsed_list[0], dict) else {},
+            "raw_ast_pool": parsed_list
+        }
+
+        # 3. Cache the structured blueprint to disk
+        session_blueprint_dir = os.path.join("storage", "blueprints")
+        os.makedirs(session_blueprint_dir, exist_ok=True)
+
+        target_blueprint_file = os.path.join(session_blueprint_dir, f"{payload.session_id}.json")
+        with open(target_blueprint_file, "w", encoding="utf-8") as f:
+            json.dump(blueprint_data, f, indent=4)
+        # Attempt to seed the vector DB with extracted code vectors for faster retrieval
+        try:
+            store_codebase_vectors(parsed_list)
+        except Exception as e:
+            print(f"   ↳ ⚠️ Seeding vector DB failed: {e}")
+            
+        print(f"💾 Ingestion complete. Balanced blueprint schema written!")
+        
+        return {
+            "status": "success",
+            "message": f"Successfully indexed workspace data at {target_path}",
+            "file_count": len(parsed_list) if isinstance(parsed_list, list) else 0
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"AST Ingestion Pipeline failed: {str(e)}"
+        )
+
 @app.post("/api/chat/submit")
 def submit_chat_turn(payload: ChatMessage):
     user_input = payload.message.strip()
@@ -80,44 +140,41 @@ def submit_chat_turn(payload: ChatMessage):
         raise HTTPException(status_code=400, detail="Input cannot be empty.")
 
     try:
+        # 🧠 USE AN EXPLICIT SESSION THREAD FOR CHECKPOINTING
+        thread_id = payload.session_id if payload.session_id else "default_session"
+        session_blueprint_file = os.path.join("storage", "blueprints", f"{thread_id}.json")
+
         repo_blueprint_data = {}
-        if os.path.exists(BLUEPRINT_PATH):
-            with open(BLUEPRINT_PATH, "r", encoding="utf-8") as f:
+        if os.path.exists(session_blueprint_file):
+            with open(session_blueprint_file, "r", encoding="utf-8") as f:
                 repo_blueprint_data = json.load(f)
+        else:
+            if os.path.exists(BLUEPRINT_PATH):
+                with open(BLUEPRINT_PATH, "r", encoding="utf-8") as f:
+                    repo_blueprint_data = json.load(f)
+        config = {"configurable": {"thread_id": thread_id}}
 
-        # Extract the dynamic client-side message counter from session_id
-        try:
-            history_length = int(payload.session_id)
-        except ValueError:
-            history_length = 1
-
-        # Calculate exactly where we are in the 5-question interview loop
-        # History length of 1 means only the initial greeting is present -> Next is Question 1
-        if history_length <= 1:
+        current_state = orchestrator_app.get_state(config)
+        if not current_state.values:
             active_question_index = 1
         else:
-            # Every conversation round consists of 2 messages (User response + Agent question).
-            # This cleanly increments your question tracking pointer automatically.
-            active_question_index = (history_length // 2) + 1
+            last_index = current_state.values.get("current_question_index", 1)
+            active_question_index = last_index + 1
 
-        print(f"📡 Incoming Payload Turn Calculation -> Chat History Length: {history_length} | Assigned Question Index: {active_question_index}")
+        print(f"📡 Checkpointer Thread: {thread_id} | Resolved Internal State Question Index: {active_question_index}")
 
         inputs = {
             "query": user_input,
             "messages": [{"role": "user", "content": user_input}],
             "retrieved_code_vectors": [],
             "repo_blueprint": repo_blueprint_data,
-            "current_draft": "",
-            "review_feedback": "",
-            "steps_taken": [],
             "session_mode": "interview",
             "difficulty": "medium",
             "interviewer_persona": "architect",
-            "current_question_index": active_question_index, # ◄── Perfectly tracked turn pointer
-            "evaluation_scores": []
+            "current_question_index": active_question_index,
         }
 
-        final_output = orchestrator_app.invoke(inputs)
+        final_output = orchestrator_app.invoke(inputs, config=config)
 
         # Check if we just completed the final question
         if active_question_index >= 6:
@@ -134,6 +191,19 @@ def submit_chat_turn(payload: ChatMessage):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Graph Engine Error: {str(e)}")
+
+
+@app.get("/api/blueprint/{session_id}")
+def get_session_blueprint(session_id: str):
+    session_blueprint_file = os.path.join("storage", "blueprints", f"{session_id}.json")
+    if not os.path.exists(session_blueprint_file):
+        raise HTTPException(status_code=404, detail="Blueprint not found for given session_id")
+    try:
+        with open(session_blueprint_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load blueprint: {e}")
 
 if __name__ == "__main__":
     import uvicorn
