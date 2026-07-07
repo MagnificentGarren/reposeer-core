@@ -17,7 +17,7 @@ Reposeer Studio automatically analyzes software repositories to generate archite
 
 ### Live Evaluation Session
 
-![Evaluation Session](docs/images/session.png)
+![Evaluation Session](docs/images/evaluation-session.png)
 
 ---
 
