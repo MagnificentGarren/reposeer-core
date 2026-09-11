@@ -304,4 +304,4 @@ Distributed under the MIT License. See the `LICENSE` file for more information.
 
 ---
 
-Built with ❤️ using **FastAPI**, **LangGraph**, **Next.js**, **Tailwind CSS**, and **PostgreSQL**.
+Built using **FastAPI**, **LangGraph**, **Next.js**, **Tailwind CSS**, and **PostgreSQL**.
